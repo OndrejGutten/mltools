@@ -1,0 +1,16 @@
+build/lib/mltools/__init__.py
+build/lib/mltools/data.py
+build/lib/mltools/model.py
+build/lib/mltools/utils.py
+build/lib/mltools/architecture/__init__.py
+build/lib/mltools/architecture/TF_IDF_Vectorizer_KNN.py
+mltools/mltools.egg-info/dependency_links.txt
+mltools/mltools.egg-info/PKG-INFO
+mltools/mltools.egg-info/requires.txt
+mltools/mltools.egg-info/SOURCES.txt
+mltools/mltools.egg-info/top_level.txt
+mltools.egg-info/dependency_links.txt
+mltools.egg-info/PKG-INFO
+mltools.egg-info/requires.txt
+mltools.egg-info/SOURCES.txt
+mltools.egg-info/top_level.txt

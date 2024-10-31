@@ -1,5 +1,5 @@
-from . import utils
-from ..architecture import TF_IDF_Vectorizer_KNN
+from mltools import utils
+from mltools.architecture import TF_IDF_Vectorizer_KNN
 
 
 def setup_model(config):
