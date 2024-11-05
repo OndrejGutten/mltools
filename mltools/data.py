@@ -31,7 +31,8 @@ def load_data(config: dict):
     ...         'path': 'path/to/data', # relative to root if root is provided; absolute otherwise
     ...         'format': 'one_folder_per_sample',
     ...         'data_file': 'data.txt',
-    ...         'label_file': 'label.txt', # optional
+    ...         'label_file': 'label.txt', # Name of file where labels are stored. Optional. Only used for 'one_folder_per_sample' format.
+                'targets': 'label' # Name of the column where labels are stored. Optional. Used for 'from_file' format.
     ...     }
     ... }
     >>> dataset = load_data(config)
@@ -43,7 +44,7 @@ def load_data(config: dict):
     if data_path is None:
         raise ValueError('The data path is not provided.')
 
-    full_data_path = os.path.join(path_prefix, data_path)
+    full_data_path = 'file://' + os.path.join(path_prefix, data_path)
 
     dataset_name = utils.get_nested(
         config, ['data', 'name'], 'dataset')
@@ -70,15 +71,25 @@ def load_data(config: dict):
         if label_file is not None:
             file_dict['label'] = label_file
         df = datareader_one_folder_per_sample_to_df(full_data_path, file_dict)
-
-        # Create the dataset object
         dataset_targets = 'label' if 'label' in file_dict else None
-        dataset = mlflow.data.from_pandas(
-            df, source=full_data_path, name=dataset_name, targets=dataset_targets)
-        return dataset
+    elif: config['data']['format'] == 'mlflow_run':
+        raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
+    elif: config['data']['format'] == 'from_file':
+        if not os.path.exists(full_data_path):
+            raise FileNotFoundError(
+                f'The file {full_data_path} does not exist.')
+        
+        df = datareader_from_file_to_df(full_data_path)
+        dataset_targets = get_nested(config, ['data', 'targets'], None)
     else:
         raise ValueError(f'Unsupported data format: \
                          {config["data"]["format"]}')
+
+    # Create the dataset object
+    dataset = mlflow.data.from_pandas(
+        df, source=full_data_path, name=dataset_name, targets=dataset_targets)
+    return dataset
+
 
 
 def datareader_one_folder_per_sample_to_df(src_folder: str, file_dict: dict):
@@ -112,10 +123,38 @@ def datareader_one_folder_per_sample_to_df(src_folder: str, file_dict: dict):
 
     return pd.DataFrame(data)
 
+def datareader_from_file_to_df(file_path: str):
+    """
+    Parameters
+    ----------
+    file_path : str
+        The path to the file containing the data.
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the data from the specified file.
+    Examples
+    --------
+    >>> file_path = 'data.csv'
+    >>> df = from_file_to_df(file_path)
+    """
+    extension = os.path.splitext(file_path)[1]
+    if extension == '.csv':
+        df = pd.read_csv(file_path, header = True)
+    elif extension == '.parquet':
+        df = pd.read_parquet(file_path)
+    elif extension == '.pkl' or extension == '.pickle':
+        df = pd.read_pickle(file_path)
+    elif extension == '.joblib':
+        df = joblib.load(file_path)
+    else:
+        raise NotImplementedError(f'Unsupported file format: {extension}')
+    return df
 
 def datareader_from_mlflow_run(run_id):
     # TODO:
     pass
+
 
 
 def pandas_split_categorical_data(df: pd.DataFrame, sizes: list[float] = [0.8, 0.2], stratified: bool = False, target_column: str = None, random_state: int = 42):

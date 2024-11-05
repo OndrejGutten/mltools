@@ -3,6 +3,24 @@ from mltools.architecture import TF_IDF_Vectorizer_KNN
 
 
 def setup_model(config):
+    """
+    Setup a model given information in the config. If uri is provided, load the model from the uri. Otherwise, create a new model.
+
+    Parameters
+    ----------
+    config : dict
+        A dictionary containing the configuration parameters. config['model'] is relevant for this function.
+
+    Returns
+    -------
+    mlflow.pyfunc.PyFuncModel
+        The model.
+    """
+    model_uri = utils.get_nested(config, ['model', 'uri'], None)
+    if model_uri is not None:
+        model = mlflow.pyfunc.load_model(model_uri)
+        return model
+
     model_type = utils.get_nested(config, ['model', 'type'], None)
     if model_type is None:
         raise ValueError("Model type not provided.")

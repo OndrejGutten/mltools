@@ -1,6 +1,7 @@
 import os
 from functools import reduce
 import mlflow
+import subprocess
 
 
 def parse_string_as_path(string: str) -> str | None:
@@ -27,7 +28,7 @@ def parse_string_as_path(string: str) -> str | None:
         'None'
     """
 
-    if string != '':
+    if string != '' and string is not None:
         tentative_filepath = os.path.join(os.getcwd(), string)
         if os.path.exists(tentative_filepath):
             return tentative_filepath
@@ -113,3 +114,24 @@ def set_run_tags(config: dict):
         config, ['experiment_metadata', 'description']))
     mlflow.set_tag('task_type', get_nested(
         config, ['experiment_metadata', 'task_type']))
+
+
+def generate_requirements_file(file = 'requirements.txt'):
+    """
+    Generate a requirements.txt file based on the current environment's dependencies.
+
+    Parameters
+    ----------
+    file : str, optional
+        The name of the requirements file. The default is 'requirements.txt'.
+    Returns
+    -------
+    None
+    """
+
+    # Run `pip freeze` to capture the current environment's dependencies
+    result = subprocess.run(["pip", "freeze"], stdout=subprocess.PIPE, text=True)
+    
+    # Write the output to `requirements.txt`
+    with open("requirements.txt", "w") as req_file:
+        req_file.write(result.stdout)
