@@ -2,7 +2,7 @@ import os
 from functools import reduce
 import mlflow
 import subprocess
-
+import fsspec
 
 def parse_string_as_path(string: str) -> str | None:
     """
@@ -135,3 +135,37 @@ def generate_requirements_file(file = 'requirements.txt'):
     # Write the output to `requirements.txt`
     with open("requirements.txt", "w") as req_file:
         req_file.write(result.stdout)
+
+def path_exists(uri: str) -> bool:
+    """
+    Check if a file/directory exists. Supports multiple filesystems (e.g. local, http, s3, gs, etc.)
+
+    Parameters
+    ----------
+    uri : str
+        A path to check.
+
+    Returns
+    -------
+    bool
+        True if the path exists, False otherwise.
+
+    Examples
+    --------
+        >>> path_exists('data')
+        True
+        >>> path_exists('nonexistent_data')
+        False
+        >>> path_exists('file:///data')
+        True
+        >>> path_exists('http://127.0.0.1/data')
+        True
+    """
+    pass
+    try:
+        protocol = fsspec.utils.get_protocol(uri)
+        fs = fsspec.filesystem(protocol)
+    except ValueError:
+        raise ValueError(f"Protocol not recognized: {protocol}")
+        
+    return fs.exists(uri)

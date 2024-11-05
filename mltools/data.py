@@ -44,7 +44,7 @@ def load_data(config: dict):
     if data_path is None:
         raise ValueError('The data path is not provided.')
 
-    full_data_path = 'file://' + os.path.join(path_prefix, data_path)
+    full_data_path = os.path.join(path_prefix, data_path)
 
     dataset_name = utils.get_nested(
         config, ['data', 'name'], 'dataset')
