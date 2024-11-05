@@ -18,7 +18,8 @@ def setup_model(config):
     """
     model_uri = utils.get_nested(config, ['model', 'uri'], None)
     if model_uri is not None:
-        model = mlflow.pyfunc.load_model(model_uri)
+        wrapped_model = mlflow.pyfunc.load_model(model_uri)
+        model = mlflow.pyfunc.PyFuncModel.get_raw_model(wrapped_model)
         return model
 
     model_type = utils.get_nested(config, ['model', 'type'], None)
