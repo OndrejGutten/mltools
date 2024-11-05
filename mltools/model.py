@@ -1,6 +1,6 @@
 from mltools import utils
 from mltools.architecture import TF_IDF_Vectorizer_KNN
-
+import mlflow
 
 def setup_model(config):
     """
