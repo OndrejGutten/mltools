@@ -72,9 +72,9 @@ def load_data(config: dict):
             file_dict['label'] = label_file
         df = datareader_one_folder_per_sample_to_df(full_data_path, file_dict)
         dataset_targets = 'label' if 'label' in file_dict else None
-    elif: config['data']['format'] == 'mlflow_run':
+    elif config['data']['format'] == 'mlflow_run':
         raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
-    elif: config['data']['format'] == 'from_file':
+    elif config['data']['format'] == 'from_file':
         if not os.path.exists(full_data_path):
             raise FileNotFoundError(
                 f'The file {full_data_path} does not exist.')

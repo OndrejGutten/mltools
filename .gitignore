@@ -14,3 +14,9 @@ mltools.egg-info/PKG-INFO
 mltools.egg-info/requires.txt
 mltools.egg-info/SOURCES.txt
 mltools.egg-info/top_level.txt
+mltools/__pycache__/__init__.cpython-311.pyc
+mltools/__pycache__/data.cpython-311.pyc
+mltools/__pycache__/model.cpython-311.pyc
+mltools/__pycache__/utils.cpython-311.pyc
+mltools/architecture/__pycache__/__init__.cpython-311.pyc
+mltools/architecture/__pycache__/TF_IDF_Vectorizer_KNN.cpython-311.pyc
