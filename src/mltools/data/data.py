@@ -5,7 +5,7 @@ from mltools import utils
 import mlflow
 
 
-def load_data(config: dict):
+def read_data(config: dict):
     """
     Load data based on info from the config dictionary and return it as mlflow's dataset object.
 
@@ -30,9 +30,11 @@ def load_data(config: dict):
     ...         'name': 'dataset_name',
     ...         'path': 'path/to/data', # relative to root if root is provided; absolute otherwise
     ...         'format': 'one_folder_per_sample',
-    ...         'data_file': 'data.txt',
-    ...         'label_file': 'label.txt', # Name of file where labels are stored. Optional. Only used for 'one_folder_per_sample' format.
-                'targets': 'label' # Name of the column where labels are stored. Optional. Used for 'from_file' format.
+    ...         'target': 'label' # Name of the column where labels are stored. Optional. 
+    ...         'mapping': { // relevant only for 'one_folder_per_sample' format, see corresponding datareader/datawriter function
+    ...             'data': 'data.txt',
+    ...             'label': 'data.txt'
+    ...         }
     ...     }
     ... }
     >>> dataset = load_data(config)
@@ -50,28 +52,9 @@ def load_data(config: dict):
         config, ['data', 'name'], 'dataset')
 
     if config['data']['format'] == 'one_folder_per_sample':
-        if not os.path.exists(full_data_path):
-            raise FileNotFoundError(
-                f'The folder {full_data_path} does not exist.')
-
-        # Extract info on how to read the data
-        # The data file is mandatory
-        data_file = utils.get_nested(config, ['data', 'data_file'])
-        if data_file is None:
-            raise ValueError(
-                'data_file not provided. For \'one_folder_per_sample\' format, a filename with data has to be provided in data/data_file entry.')
-
-        # The label file is optional
-        label_file = utils.get_nested(
-            config, ['data', 'label_file'])
-
         # Read the data
-        file_dict = {}
-        file_dict['data'] = data_file
-        if label_file is not None:
-            file_dict['label'] = label_file
-        df = datareader_one_folder_per_sample_to_df(full_data_path, file_dict)
-        dataset_targets = 'label' if 'label' in file_dict else None
+        file_to_value_mapping = utils.get_nested(config, ['data', 'mapping'], {})
+        df = datareader_one_folder_per_sample_to_df(full_data_path, file_to_value_mapping)
     elif config['data']['format'] == 'mlflow_run':
         raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
     elif config['data']['format'] == 'from_file':
@@ -80,19 +63,166 @@ def load_data(config: dict):
                 f'The file {full_data_path} does not exist.')
         
         df = datareader_from_file_to_df(full_data_path)
-        dataset_targets = get_nested(config, ['data', 'targets'], None)
     else:
         raise ValueError(f'Unsupported data format: \
                          {config["data"]["format"]}')
 
     # Create the dataset object
+    dataset_target = get_nested(config, ['data', 'targets'], None)
     dataset = mlflow.data.from_pandas(
-        df, source=full_data_path, name=dataset_name, targets=dataset_targets)
+        df, source=full_data_path, name=dataset_name, targets=dataset_target)
     return dataset
 
+def write_data(config: dict, dataset:  mlflow.data.pandas_dataset.PandasDataset):
+    '''
+    Write data based on info from the config dictionary.
 
+    Parameters
+    ----------
+    config : dict
+        A dictionary containing the configuration parameters. config[output] is releveant for this function.
 
-def datareader_one_folder_per_sample_to_df(src_folder: str, file_dict: dict):
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    >>> config = {
+    ...     'global': {
+    ...         'root_path': 'path/to/root'
+    ...     },
+    ...     'output': {
+    ...         'path': 'path/to/output',
+    ...         'format': 'one_folder_per_sample', // or 'to_file'
+    ...         'file_dict': { // relevant only for 'one_folder_per_sample' format, see corresponding datawriter function
+    ...             'text': 'Text.txt',
+    ...             'label': 'Type.txt'
+    ...         }
+    ...     }
+    ... }
+    >>> dataset = mlflow.data.PandasDataset(pd.DataFrame({
+    ...     'text': ['a', 'b', 'c', 'd', 'e'],
+    ...     'label': [0, 1, 0, 1, 0]
+    ... }))
+    >>> write_data(config, dataset) 
+    '''
+
+    path_prefix = utils.get_nested(
+        config, ['global', 'root_path'], '')
+    output_path = utils.get_nested(config, ['output', 'path'])
+
+    if output_path is None:
+        raise ValueError('The output path is not provided.')
+
+    full_output_path = os.path.join(path_prefix, output_path)
+
+    if config['output']['format'] == 'one_folder_per_sample':
+        datawriter_one_folder_per_sample(dataset.df, full_output_path, config['output']['file_dict'])
+    elif config['output']['format'] == 'to_file':
+        datawriter_to_file(dataset.df, full_output_path)
+    else:
+        raise ValueError(f'Unsupported output format: \
+                         {config["output"]["format"]}')
+
+def datawriter_one_folder_per_sample(df: pd.DataFrame, path: str, file_dict: dict = {}):
+    '''
+    Write data from a DataFrame to a folder. If the folder contains any files an error is raised.
+    Each sample is written into a separate subfolder. Each subfolder files named after DataFrame column names or mapped by file_dict parameter.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame to write.
+    path : str
+        The path to the root folder where the data will be written.
+    file_dict : dict
+        An optional map of column names to file names. If not provided, the column names are used as file names with *.txt extension.
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ...     'text': ['a', 'b', 'c', 'd', 'e'],
+    ...     'label': [0, 1, 0, 1, 0]
+    ... })
+    >>> path = 'empty_folder'
+    >>> datawriter_one_folder_per_sample(df, path)
+        'Data written'
+    >>> path = 'folder_with_files'
+    >>> datawriter_one_folder_per_sample(df, path)
+        'Error: Folder is not empty'
+    >>> path = 'non_existing_folder'
+    >>> datawriter_one_folder_per_sample(df, path)
+        'Data written'
+    >>> path = 'empty_folder_with_custom_files'
+    >>> file_dict = {
+    ...     'text': 'Text.txt'
+    ... }
+    >>> datawriter_one_folder_per_sample(df, path, file_dict)
+        'Data written'
+    '''
+    if os.path.exists(path) and len(os.listdir(path)) > 0:
+        raise ValueError('Error: Folder is not empty')
+
+    for i, row in df.iterrows():
+        sample_folder = os.path.join(path, str(df.index[i]))
+        os.makedirs(sample_folder, exist_ok=True)
+        for column, value in row.items():
+            mapped_name = file_dict.get(column, f'{column}.txt')
+            with open(os.path.join(sample_folder, mapped_name), 'w') as f:
+                f.write(str(value))
+
+def datawriter_to_file(df: pd.DataFrame, file_path: str):
+    '''
+    Write data from a DataFrame to a file. Format is inferred from the file extension.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame to write.
+    file_path : str
+        The path to the file where the data will be written. The extension of the file determines the format. Supported formats are: .csv, .pkl, .pickle, .joblib.
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ...     'text': ['a', 'b', 'c', 'd', 'e'],
+    ...     'label': [0, 1, 0, 1, 0]
+    ... })
+    >>> file_path = 'data.csv'
+    >>> datawriter_from_df_to_file(df, file_path)
+        'Data written'
+    >>> file_path = 'data.xlsx'
+    >>> datawriter_from_df_to_file(df, file_path)
+        'Error: Unsupported file format'
+    '''
+
+    extension = os.path.splitext(file_path)[1]
+
+    if extension not in ['.csv', '.pkl', '.pickle', '.joblib']:
+        raise NotImplementedError(f'Unsupported file format: {extension}')
+
+    if not os.path.exists(os.dirname(file_path)):
+        os.makedirs(os.dirname(file_path), exist_ok=True)
+
+    if extension == '.csv':
+        df.to_csv(file_path, index=False)
+    elif extension == '.pkl' or extension == '.pickle':
+        df.to_pickle(file_path)
+    elif extension == '.joblib':
+        joblib.dump(df, file_path)
+    else:
+        raise NotImplementedError(f'Unsupported file format: {extension}')
+
+def datareader_one_folder_per_sample(src_folder: str, file_dict: dict):
     """
     Parameters
     ----------
@@ -123,7 +253,7 @@ def datareader_one_folder_per_sample_to_df(src_folder: str, file_dict: dict):
 
     return pd.DataFrame(data)
 
-def datareader_from_file_to_df(file_path: str):
+def datareader_from_file(file_path: str):
     """
     Parameters
     ----------

@@ -2,6 +2,12 @@ from mltools import utils
 from mltools.architecture import TF_IDF_Vectorizer_KNN
 import mlflow
 
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+
+
+
 def setup_model(config):
     """
     Setup a model given information in the config. If uri is provided, load the model from the uri. Otherwise, create a new model.
@@ -18,8 +24,9 @@ def setup_model(config):
     """
     model_uri = utils.get_nested(config, ['model', 'uri'], None)
     if model_uri is not None:
-        wrapped_model = mlflow.pyfunc.load_model(model_uri)
-        model = mlflow.pyfunc.PyFuncModel.get_raw_model(wrapped_model)
+        #wrapped_model = mlflow.sklearn.load_model(model_uri)
+        #model = mlflow.pyfunc.PyFuncModel.get_raw_model(wrapped_model)
+        return mlflow.sklearn.load_model(model_uri)
         return model
 
     model_type = utils.get_nested(config, ['model', 'type'], None)
@@ -27,16 +34,20 @@ def setup_model(config):
         raise ValueError("Model type not provided.")
 
     model_name = utils.get_nested(config, ['model', 'name'], None)
+    parameters = utils.get_nested(config,['model','parameters'])
 
     if model_type == "TF-IDF-KNN":
-        k = utils.get_nested(config, ['parameters', 'k'], 1)
-        store_pairwise_distances = utils.get_nested(
-            config, ['model', 'parameters', 'store_pairwise_distances'], False)
         model = TF_IDF_Vectorizer_KNN(
-            model_name=model_name, k=k, store_pairwise_distances=store_pairwise_distances)
+            model_name=model_name, **parameters)
         return model
-    elif model_type == "TF-IDF-SVC":
-        raise NotImplementedError
+    elif model_type == "TF-IDF-SVM":
+        classifier = SVC(probability = True, **parameters)
+        model = TF_IDF_Vectorizer_Classifier(classifier = classifier, model_name = model_name)
+        return model
+    elif model_type == "TF-IDF-RF":
+        classifier = RandomForestClassifier(**parameters)
+        model = TF_IDF_Vectorizer_Classifier(classifier = classifier, model_name = model_name)
+        return model
     else:
         raise ValueError(f"Model type {model_type} not recognized.")
     return None

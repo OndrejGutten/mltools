@@ -20,3 +20,16 @@ mltools/__pycache__/model.cpython-311.pyc
 mltools/__pycache__/utils.cpython-311.pyc
 mltools/architecture/__pycache__/__init__.cpython-311.pyc
 mltools/architecture/__pycache__/TF_IDF_Vectorizer_KNN.cpython-311.pyc
+build/lib/mltools/architecture/TF_IDF_Vectorizer_Classifier.py
+build/lib/mltools/architecture/TF_IDF_Vectorizer_RF.py
+build/lib/mltools/architecture/TF_IDF_Vectorizer_SVM.py
+build/lib/mltools/architecture/TF_IDF_Vectorizer_XGBoost.py
+build/lib/mltools/data/__init__.py
+build/lib/mltools/data/data.py
+build/lib/mltools/data/preprocess.py
+src/mltools/__pycache__/__init__.cpython-311.pyc
+src/mltools/__pycache__/data.cpython-311.pyc
+src/mltools/__pycache__/model.cpython-311.pyc
+src/mltools/__pycache__/utils.cpython-311.pyc
+src/mltools/architecture/__pycache__/__init__.cpython-311.pyc
+src/mltools/architecture/__pycache__/TF_IDF_Vectorizer_KNN.cpython-311.pyc
