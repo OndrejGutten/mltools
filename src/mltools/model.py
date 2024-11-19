@@ -1,11 +1,11 @@
 from mltools import utils
 from mltools.architecture import TF_IDF_Vectorizer_KNN
+from mltools.architecture import TF_IDF_Vectorizer_Classifier
 import mlflow
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
-
 
 
 def setup_model(config):
@@ -34,19 +34,19 @@ def setup_model(config):
         raise ValueError("Model type not provided.")
 
     model_name = utils.get_nested(config, ['model', 'name'], None)
-    parameters = utils.get_nested(config,['model','parameters'])
+    parameters = utils.get_nested(config,['model','parameters'], {})
 
     if model_type == "TF-IDF-KNN":
-        model = TF_IDF_Vectorizer_KNN(
-            model_name=model_name, **parameters)
+        baseline_classifier = KNeighborsClassifier(**parameters)
+        model = TF_IDF_Vectorizer_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
         return model
     elif model_type == "TF-IDF-SVM":
-        classifier = SVC(probability = True, **parameters)
-        model = TF_IDF_Vectorizer_Classifier(classifier = classifier, model_name = model_name)
+        baseline_classifier = SVC(probability = True, **parameters)
+        model = TF_IDF_Vectorizer_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
         return model
     elif model_type == "TF-IDF-RF":
-        classifier = RandomForestClassifier(**parameters)
-        model = TF_IDF_Vectorizer_Classifier(classifier = classifier, model_name = model_name)
+        baseline_classifier = RandomForestClassifier(**parameters)
+        model = TF_IDF_Vectorizer_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
         return model
     else:
         raise ValueError(f"Model type {model_type} not recognized.")

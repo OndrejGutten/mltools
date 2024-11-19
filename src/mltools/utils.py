@@ -3,6 +3,8 @@ from functools import reduce
 import mlflow
 import subprocess
 import fsspec
+import pandas as pd
+import yaml
 
 def parse_string_as_path(string: str) -> str | None:
     """
@@ -169,3 +171,75 @@ def path_exists(uri: str) -> bool:
         raise ValueError(f"Protocol not recognized: {protocol}")
         
     return fs.exists(uri)
+
+def make_iterable(obj : any, type: type = list) -> list | tuple | pd.DataFrame:
+    """
+    Convert an object to an iterable.
+
+    Parameters
+    ----------
+    obj : any
+        An object to convert to an iterable.
+    type : type, optional
+        The type of the iterable. The default is list.
+
+    Returns
+    -------
+    iterable
+        An iterable object.
+
+    Examples
+    --------
+        >>> make_iterable('a')
+        ['a']
+        >>> make_iterable(['a'])
+        ['a']
+        >>> make_iterable('a', pd.DataFrame)
+        pd.DataFrame(['a'])
+        >>> make_iterable(['a'], pd.DataFrame)
+        pd.DataFrame(['a'])
+    """
+    if isinstance(obj, type):
+        return obj
+    
+    if type == pd.DataFrame and (not hasattr(obj, '__iter__') or isinstance(obj, str)):
+        return pd.DataFrame([obj])
+    return type(obj)
+
+def get_dependencies_from_MLProject(project_file: str = 'MLproject') -> dict:
+    """
+    Extract dependencies from an MLproject file.
+
+    Parameters
+    ----------
+    file : str, optional
+        The name of the MLproject file. The default is 'MLproject'.
+
+    Returns
+    -------
+    list[str]
+        A list of dependencies as listed in the environment file referenced in the MLproject file.
+
+    Examples
+    --------
+        >>> get_dependencies_from_MLProject('MLproject')
+        ['pandas', 'scikit-learn', 'numpy']
+    """
+    # Path to the MLproject file
+    mlproject_path = os.path.join(project_file)
+
+    # Read the MLproject file
+    with open(mlproject_path, "r") as f:
+        mlproject = yaml.safe_load(f)
+
+    # Extract the environment file name
+    env_file = mlproject.get("conda_env", mlproject.get(
+        "pip_env", mlproject.get("python_env", None)))
+    if not env_file:
+        raise ValueError("No environment file specified in MLproject")
+
+    # Load the environment file content
+    with open(env_file, "r") as f:
+        env_content = yaml.safe_load(f)
+    # Extract pip dependencies (if conda_env)
+    return env_content.get("dependencies", [])

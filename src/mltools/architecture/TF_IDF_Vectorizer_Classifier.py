@@ -4,21 +4,25 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
 
 # TODO: introduce calibrated classifier to the pipeline
 
 
-class TF_IDF_Vectorizer_Calibrated_Classifier():
-    def __init__(self, classifier: Pipeline, model_name: str):
+class TF_IDF_Vectorizer_Classifier():
+    def __init__(self, baseline_classifier: Pipeline, model_name: str):
         self.__repr__ = f"TF_IDF_Vectorizer_Calibrated_Classifier - {model_name}"
+        self.baseline_classifier = baseline_classifier
         self.name = model_name
-        self.clf = Pipeline((
-            ('vect', TfidfVectorizer()),
-            ('clf', classifier)
-        )
-        )
+        
 
     def fit(self, X: pd.DataFrame, y: list | pd.Series):
+        baseline_pipeline = Pipeline((
+            ('vect', TfidfVectorizer()),
+            ('clf', self.baseline_classifier)
+        ))
+        baseline_pipeline.fit(X, y)
+        self.clf = CalibratedClassifierCV(estimator=baseline_pipeline, method='isotonic',cv = 'prefit')
         self.clf.fit(X, y)
         self.known_labels = np.unique(y)
 

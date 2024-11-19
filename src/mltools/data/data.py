@@ -6,6 +6,7 @@ import mlflow
 
 
 def read_data(config: dict):
+    #TODO: always return a list of datasets (even if split_sizes argument is not provided)
     """
     Load data based on info from the config dictionary and return it as mlflow's dataset object.
 
@@ -54,7 +55,7 @@ def read_data(config: dict):
     if config['data']['format'] == 'one_folder_per_sample':
         # Read the data
         file_to_value_mapping = utils.get_nested(config, ['data', 'mapping'], {})
-        df = datareader_one_folder_per_sample_to_df(full_data_path, file_to_value_mapping)
+        df = datareader_one_folder_per_sample(full_data_path, file_to_value_mapping)
     elif config['data']['format'] == 'mlflow_run':
         raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
     elif config['data']['format'] == 'from_file':
@@ -62,15 +63,22 @@ def read_data(config: dict):
             raise FileNotFoundError(
                 f'The file {full_data_path} does not exist.')
         
-        df = datareader_from_file_to_df(full_data_path)
+        df = datareader_from_file(full_data_path)
     else:
         raise ValueError(f'Unsupported data format: \
                          {config["data"]["format"]}')
 
     # Create the dataset object
-    dataset_target = get_nested(config, ['data', 'targets'], None)
+    dataset_target = utils.get_nested(config, ['data', 'targets'], None)
     dataset = mlflow.data.from_pandas(
         df, source=full_data_path, name=dataset_name, targets=dataset_target)
+    
+    # split the data if split_sizes are provided
+    split_sizes = utils.get_nested(config, ['data', 'split_sizes'], None)
+    if split_sizes is not None:
+        datasets = mlflow_split_categorical_data(dataset, sizes=split_sizes, stratified=True, target_column=dataset_target)
+        return datasets
+
     return dataset
 
 def write_data(config: dict, dataset:  mlflow.data.pandas_dataset.PandasDataset):
@@ -111,19 +119,27 @@ def write_data(config: dict, dataset:  mlflow.data.pandas_dataset.PandasDataset)
     path_prefix = utils.get_nested(
         config, ['global', 'root_path'], '')
     output_path = utils.get_nested(config, ['output', 'path'])
+    output_format = utils.get_nested(config, ['output', 'format'], None)
+    output_file_mapping = utils.get_nested(config, ['output', 'mapping'], {})
 
     if output_path is None:
-        raise ValueError('The output path is not provided.')
+        raise ValueError('The output path is not provided - config[output][output_path]')
+
+    if output_format is None:
+        raise ValueError('The output format is not provided - config[output][format]')
+    
+    if len(output_file_mapping) == 0 and output_format == 'one_folder_per_sample':
+        raise ValueError('The file mapping is not provided - config[output][mapping]')
 
     full_output_path = os.path.join(path_prefix, output_path)
 
-    if config['output']['format'] == 'one_folder_per_sample':
-        datawriter_one_folder_per_sample(dataset.df, full_output_path, config['output']['file_dict'])
-    elif config['output']['format'] == 'to_file':
+    if output_format == 'one_folder_per_sample':
+        datawriter_one_folder_per_sample(dataset.df, full_output_path, output_file_mapping)
+    elif output_format == 'to_file':
         datawriter_to_file(dataset.df, full_output_path)
     else:
         raise ValueError(f'Unsupported output format: \
-                         {config["output"]["format"]}')
+                         {output_format}')
 
 def datawriter_one_folder_per_sample(df: pd.DataFrame, path: str, file_dict: dict = {}):
     '''
@@ -241,7 +257,7 @@ def datareader_one_folder_per_sample(src_folder: str, file_dict: dict):
     ...     'text': 'Text.txt',
     ...     'label': 'Type.txt'
     ... }
-    >>> df = one_folder_per_sample_to_df(src_folder, file_dict)
+    >>> df = one_folder_per_sample(src_folder, file_dict)
     """
     data = []
     for folder in os.listdir(src_folder):
@@ -266,11 +282,11 @@ def datareader_from_file(file_path: str):
     Examples
     --------
     >>> file_path = 'data.csv'
-    >>> df = from_file_to_df(file_path)
+    >>> df = datareader_from_file(file_path)
     """
     extension = os.path.splitext(file_path)[1]
     if extension == '.csv':
-        df = pd.read_csv(file_path, header = True)
+        df = pd.read_csv(file_path, header = 0)
     elif extension == '.parquet':
         df = pd.read_parquet(file_path)
     elif extension == '.pkl' or extension == '.pickle':
@@ -302,7 +318,7 @@ def pandas_split_categorical_data(df: pd.DataFrame, sizes: list[float] = [0.8, 0
     random_state : int
         The seed used by the random number generator.
     Returns
-    -------
+    -------d
     tuple of pd.DataFrame
         The train, validation, and test sets.
     Examples
@@ -368,5 +384,29 @@ def mlflow_split_categorical_data(dataset: mlflow.data.pandas_dataset.PandasData
     mlflow_datasets = []
     for subset_dataset, name in zip(subset_dfs, names):
         mlflow_datasets.append(
-            mlflow.data.from_pandas(subset_dataset, name=f'{dataset.name} - {name}'))
+            mlflow.data.from_pandas(subset_dataset, name=f'{dataset.name} - {name}', source=mlflow.data.get_source(dataset), targets=dataset.targets))
     return tuple(mlflow_datasets)
+
+def drop_classes_with_1_member(df: pd.DataFrame, target_column: str):
+    """
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame to process.
+    target_column : str
+        The name of the column containing the target values.
+    Returns
+    -------
+    pd.DataFrame
+        The DataFrame with classes that have only one member removed.
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ...     'text': ['a', 'b', 'c', 'd', 'e'],
+    ...     'label': [0, 1, 0, 1, 0]
+    ... })
+    >>> df = drop_classes_with_1_member(df, 'label')
+    """
+    class_counts = df[target_column].value_counts()
+    classes_to_drop = class_counts[class_counts == 1].index
+    return df[~df[target_column].isin(classes_to_drop)]

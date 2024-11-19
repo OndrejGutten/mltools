@@ -9,7 +9,8 @@ import simplemma
 import re
 import logging
 import nltk
-import json
+import pandas as pd
+from mltools import utils
 
 # TODO: replace stopwords with mask tokens
 
@@ -84,6 +85,9 @@ class TextPreprocessor:
             text = preprocess_function(text)
         return text
 
+    def preprocess_iterable(self, iterable, preprocess_stack: list[str]) -> list[str]:
+        return [self.preprocess_single(text, preprocess_stack) for text in utils.make_iterable(iterable)]
+
     def preprocess_folder(self, input_dir: str, output_dir: str, preprocess_stack: list[str]):
         for p in tqdm(sorted(os.listdir(input_dir))):
             os.makedirs(f"{output_dir}/{p}", exist_ok=True)
@@ -143,7 +147,7 @@ class TextPreprocessor:
         return re.sub(r'www\.[^\s]*', ' [URL] ', text)
 
     def replace_formatted_numbers(self, text):
-        return re.sub(r' (\d+[\s,]*)+ ', ' [NUMBER] ', text)
+        return re.sub(r'(\d+([,]\d+)*\s*)+', ' [NUMBER] ', text)
 
     def remove_non_ascii(self, text):
         return regex.sub(r'[^\w\s\p{L}\p{M}\p{P}]', '', text)
