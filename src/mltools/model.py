@@ -1,5 +1,4 @@
 from mltools import utils
-from mltools.architecture import TF_IDF_Vectorizer_KNN
 from mltools.architecture import TF_IDF_Vectorizer_Classifier
 import mlflow
 
