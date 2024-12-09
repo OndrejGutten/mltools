@@ -1,5 +1,5 @@
 setup.py
-src/architecture/TF_IDF_Vectorizer_KNN.py
+src/architecture/TF_IDF_KNN.py
 src/architecture/__init__.py
 src/mltools.egg-info/PKG-INFO
 src/mltools.egg-info/SOURCES.txt

@@ -16,7 +16,6 @@ from mltools import utils
 
 nltk.download('punkt')
 
-
 class TextPreprocessor:
     '''
     Class used for removing stop words, removing repeated characters, and despacing text

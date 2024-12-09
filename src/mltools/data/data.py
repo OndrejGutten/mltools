@@ -7,13 +7,14 @@ import mlflow
 
 def read_data(config: dict):
     #TODO: always return a list of datasets (even if split_sizes argument is not provided)
+    #TODO how to deal with multiple datasets when sometimes we need input/output but only read input
     """
     Load data based on info from the config dictionary and return it as mlflow's dataset object.
 
     Parameters
     ----------
     config : dict
-        A dictionary containing the configuration parameters. config['data'] is releveant for this function.
+        A dictionary containing the configuration parameters. config['dataset'] is releveant for this function.
 
     Returns
     -------
@@ -27,7 +28,7 @@ def read_data(config: dict):
                 root_path: 'path/to/root'
             }
 
-    ...     'data': {
+    ...     'dataset': {
     ...         'name': 'dataset_name',
     ...         'path': 'path/to/data', # relative to root if root is provided; absolute otherwise
     ...         'format': 'one_folder_per_sample',
@@ -40,9 +41,28 @@ def read_data(config: dict):
     ... }
     >>> dataset = load_data(config)
     """
+
+    dataset_block = utils.get_nested(config, ['dataset'], None)
+    datasets_block = utils.get_nested(config, ['datasets'], None)
+
+    if dataset_block is None and datasets_block is None:
+        raise ValueError('The dataset or datasets block is not provided - config[dataset] or config[datasets]')
+    
+    if dataset_block is not None and datasets_block is not None:
+        raise ValueError('Both dataset and datasets blocks are provided - only one of config[dataset]/config[datasets] is allowed')
+    
+    global_subblock = utils.get_nested(config, ['global'], {})
+
+    if dataset_block is not None:
+        return _read_single_dataset_from_config_subblock(dataset_block, global_subblock)
+    else:
+        return [_read_single_dataset_from_config_subblock(subblock, global_subblock) for subblock in datasets_block]
+
+
+def _read_single_dataset_from_config_subblock(single_dataset_subblock: dict, global_subblock: dict):
     path_prefix = utils.get_nested(
-        config, ['global', 'root_path'], '')
-    data_path = utils.get_nested(config, ['data', 'path'])
+        global_subblock, ['root_path'], '')
+    data_path = utils.get_nested(single_dataset_subblock, ['path'], None)
 
     if data_path is None:
         raise ValueError('The data path is not provided.')
@@ -50,15 +70,17 @@ def read_data(config: dict):
     full_data_path = os.path.join(path_prefix, data_path)
 
     dataset_name = utils.get_nested(
-        config, ['data', 'name'], 'dataset')
+        single_dataset_subblock, ['name'], 'dataset')
 
-    if config['data']['format'] == 'one_folder_per_sample':
+    format_subblock = utils.get_nested(single_dataset_subblock, ['format'], None)
+
+    if format_subblock == 'one_folder_per_sample':
         # Read the data
-        file_to_value_mapping = utils.get_nested(config, ['data', 'mapping'], {})
+        file_to_value_mapping = utils.get_nested(single_dataset_subblock, ['mapping'], {})
         df = datareader_one_folder_per_sample(full_data_path, file_to_value_mapping)
-    elif config['data']['format'] == 'mlflow_run':
+    elif format_subblock == 'mlflow_run':
         raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
-    elif config['data']['format'] == 'from_file':
+    elif format_subblock == 'from_file':
         if not os.path.exists(full_data_path):
             raise FileNotFoundError(
                 f'The file {full_data_path} does not exist.')
@@ -66,15 +88,15 @@ def read_data(config: dict):
         df = datareader_from_file(full_data_path)
     else:
         raise ValueError(f'Unsupported data format: \
-                         {config["data"]["format"]}')
+                         {format_subblock}')
 
     # Create the dataset object
-    dataset_target = utils.get_nested(config, ['data', 'targets'], None)
+    dataset_target = utils.get_nested(single_dataset_subblock, ['targets'], None)
     dataset = mlflow.data.from_pandas(
         df, source=full_data_path, name=dataset_name, targets=dataset_target)
     
     # split the data if split_sizes are provided
-    split_sizes = utils.get_nested(config, ['data', 'split_sizes'], None)
+    split_sizes = utils.get_nested(single_dataset_subblock, ['split_sizes'], None)
     if split_sizes is not None:
         datasets = mlflow_split_categorical_data(dataset, sizes=split_sizes, stratified=True, target_column=dataset_target)
         return datasets
@@ -82,6 +104,8 @@ def read_data(config: dict):
     return dataset
 
 def write_data(config: dict, dataset:  mlflow.data.pandas_dataset.PandasDataset):
+    # TODO: if index is not reset it will crash
+    # TODO: if mapping is incomplete, unmentioned columns will be written verbatim - is this desired?
     '''
     Write data based on info from the config dictionary.
 
@@ -226,8 +250,8 @@ def datawriter_to_file(df: pd.DataFrame, file_path: str):
     if extension not in ['.csv', '.pkl', '.pickle', '.joblib']:
         raise NotImplementedError(f'Unsupported file format: {extension}')
 
-    if not os.path.exists(os.dirname(file_path)):
-        os.makedirs(os.dirname(file_path), exist_ok=True)
+    if not os.path.exists(os.path.dirname(file_path)):
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     if extension == '.csv':
         df.to_csv(file_path, index=False)

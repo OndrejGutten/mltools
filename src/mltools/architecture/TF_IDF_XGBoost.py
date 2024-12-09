@@ -10,9 +10,9 @@ from xgboost import XGBClassifier
 # TODO: introduce calibrated classifier to the pipeline
 
 
-class TF_IDF_Vectorizer_XGBoost():
+class TF_IDF_XGBoost():
     def __init__(self, model_name: str, n_estimators: int = 100, max_depth: int = 6, learning_rate: float = 0.3):
-        self.__repr__ = f"TF_IDF_Vectorizer_XGB - {model_name}"
+        self.__repr__ = f"TF_IDF_XGB - {model_name}"
         self.name = model_name
         self.n_estimators = n_estimators
         self.max_depth = max_depth

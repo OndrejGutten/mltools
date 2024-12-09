@@ -88,7 +88,7 @@ def set_run_tags(config: dict):
     Parameters
     ----------
     config : dict
-        A dictionary with the following keys:
+        A dictionary with at least the following keys:
         - 'author': str
         - 'description': str
         - 'task_type': str
@@ -101,21 +101,35 @@ def set_run_tags(config: dict):
     Examples
     --------
         >>> config = {
-        ...     'author': '
-        ...     'description': 'A simple experiment',
+        ...     'author': Boaty McBoatface',
+        ...     'description': 'KNN classifier for the iris dataset',
         ...     'task_type': 'classification',
-        ...     'project_name': 'experiment_logging'
+        ...     'project_name': 'training'
+        ...     'custom_tag': 'custom_value'   
         ... }
         >>> set_run_tags(config)
     """
-    mlflow.set_tag('author', get_nested(
-        config, ['experiment_metadata', 'author']))
-    mlflow.set_tag('project_name', get_nested(
-        config, ['experiment_metadata', 'project_name']))
-    mlflow.set_tag('mlflow.note.content', get_nested(
-        config, ['experiment_metadata', 'description']))
-    mlflow.set_tag('task_type', get_nested(
-        config, ['experiment_metadata', 'task_type']))
+    author = get_nested(config, ['experiment_metadata', 'author'], None)
+    description = get_nested(config, ['experiment_metadata', 'description'], None)
+    task_type = get_nested(config, ['experiment_metadata', 'task_type'], None)
+    project_name = get_nested(config, ['experiment_metadata', 'project_name'], None)
+
+    if author is None:
+        raise ValueError("Author not provided.")
+    if description is None:
+        raise ValueError("Description not provided.")
+    if task_type is None:
+        raise ValueError("Task type not provided.")
+    if project_name is None:
+        raise ValueError("Project name not provided.")
+
+    for key, value in config['experiment_metadata'].items():
+        if key == 'description':
+            key = 'mlflow.note.content'
+        # if value is a dictionary raise error
+        if isinstance(value, dict):
+            raise ValueError(f"Value for key '{key}' cannot be a dictionary.")
+        mlflow.set_tag(key, str(value))
 
 
 def generate_requirements_file(file = 'requirements.txt'):
@@ -198,10 +212,18 @@ def make_iterable(obj : any, type: type = list) -> list | tuple | pd.DataFrame:
         pd.DataFrame(['a'])
         >>> make_iterable(['a'], pd.DataFrame)
         pd.DataFrame(['a'])
+        >>> make_iterable(pd.DataFrame(['a']))
+        ['a']
     """
     if isinstance(obj, type):
         return obj
-    
+
+    if isinstance(obj,pd.DataFrame):
+        obj = obj.values.flatten().tolist()
+
+    if type == list and (not hasattr(obj, '__iter__') or isinstance(obj, str)):
+        return [obj]
+
     if type == pd.DataFrame and (not hasattr(obj, '__iter__') or isinstance(obj, str)):
         return pd.DataFrame([obj])
     return type(obj)
@@ -243,3 +265,62 @@ def get_dependencies_from_MLProject(project_file: str = 'MLproject') -> dict:
         env_content = yaml.safe_load(f)
     # Extract pip dependencies (if conda_env)
     return env_content.get("dependencies", [])
+
+def get_run_name_from_model_uri(model_uri: str) -> str:
+    """
+    Extract the run name from a model URI.
+
+    Parameters
+    ----------
+    model_uri : str
+        The URI of the model.
+
+    Returns
+    -------
+    str
+        The run name.
+
+    Examples
+    --------
+        >>> get_run_name_from_model_uri('runs:/abc123def/model')
+        'run_name'
+    """
+    model_info = mlflow.models.get_model_info(model_uri)
+    run_id = model_info.run_id
+    run_info = mlflow.get_run(run_id)
+    return run_info.data.tags.get("mlflow.runName", None)
+
+def mlflow_get_logged_model_uris(run_id):
+    """
+    Get all paths to models logged during a run. Only the 
+
+    Parameters
+    ----------
+    run_id : str
+        The ID of the run.
+
+    Returns
+    -------
+    list
+        A list of models logged during the run.
+
+    Examples
+    --------
+        >>> mlflow_get_logged_models('abc123def')
+        ['model1', 'model2']
+    """
+    client = mlflow.tracking.MlflowClient()
+    artifacts = client.list_artifacts(run_id)
+
+    # Check for directories that indicate logged models
+    logged_model_uris = []
+    for artifact in artifacts:
+        if artifact.is_dir and client.list_artifacts(run_id, artifact.path):
+            # Check if the directory contains an MLmodel file
+            sub_artifacts = client.list_artifacts(
+                run_id, artifact.path)
+            if any(a.path.endswith("MLmodel") for a in sub_artifacts):
+                model_info = mlflow.models.get_model_info(f'runs:/{run_id}/{artifact.path}')
+                logged_model_uris.append(model_info.model_uri)
+
+    return logged_model_uris

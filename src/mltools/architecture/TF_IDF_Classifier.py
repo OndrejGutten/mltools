@@ -6,12 +6,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
 
+from .utils import BaseModel
+
 # TODO: introduce calibrated classifier to the pipeline
 
 
-class TF_IDF_Vectorizer_Classifier():
+class TF_IDF_Classifier(BaseModel):
     def __init__(self, baseline_classifier: Pipeline, model_name: str):
-        self.__repr__ = f"TF_IDF_Vectorizer_Calibrated_Classifier - {model_name}"
+        self.__repr__ = f"TF_IDF_Calibrated_Classifier - {model_name}"
         self.baseline_classifier = baseline_classifier
         self.name = model_name
         
@@ -31,3 +33,5 @@ class TF_IDF_Vectorizer_Classifier():
 
     def predict_proba(self, input_texts: str):
             return self.clf.predict_proba(input_texts)
+
+    
