@@ -78,14 +78,17 @@ def setup_model(config):
         model = mltools.architecture.TF_IDF_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
     elif model_type == "TF-IDF-SVM":
         baseline_classifier = SVC(probability = True, **parameters)
-        if has_class_weights:
-            baseline_classifier.class_weight = class_weights_dict
         model = mltools.architecture.TF_IDF_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
+        if has_class_weights:
+            model.set_class_weights(class_weights_dict)
     elif model_type == "TF-IDF-RF":
         baseline_classifier = RandomForestClassifier(**parameters)
-        if has_class_weights:
-            baseline_classifier.class_weight = class_weights_dict
         model = mltools.architecture.TF_IDF_Classifier(baseline_classifier = baseline_classifier, model_name = model_name)
+        if has_class_weights:
+            model.set_class_weights(class_weights_dict)
+    elif model_type == "TF-IDF-XGBoost":
+        baseline_classifier = XGBClassifier(**parameters)
+        model = mltools.architecture.TF_IDF_XGBoost()
     elif model_type == "TextPreprocessor":
         preprocessor = mltools.architecture.TextPreprocessor(**parameters)
         # prepare a version with required signature for mlflow

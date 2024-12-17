@@ -12,11 +12,18 @@ from .utils import BaseModel
 
 
 class TF_IDF_Classifier(BaseModel):
-    def __init__(self, baseline_classifier: Pipeline, model_name: str):
+    def __init__(self, baseline_classifier: Pipeline, model_name: str, class_weights: dict = None):
         self.__repr__ = f"TF_IDF_Calibrated_Classifier - {model_name}"
         self.baseline_classifier = baseline_classifier
         self.name = model_name
+        self.class_weights = class_weights
+
+        if class_weights:
+            self.set_class_weights(class_weights)
         
+    def set_class_weights(self, class_weights: dict):
+        self.class_weights = class_weights
+        self.baseline_classifier.class_weight = class_weights
 
     def fit(self, X: pd.DataFrame, y: list | pd.Series):
         baseline_pipeline = Pipeline((

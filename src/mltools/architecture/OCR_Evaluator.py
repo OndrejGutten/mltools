@@ -58,8 +58,15 @@ class OCR_Evaluator():
 
     def _input_to_df(self, data: str | list[str] | pd.DataFrame) -> pd.DataFrame:
         if isinstance(data, str):
-            return pd.DataFrame([data], columns=['text'])
+            mydf = pd.DataFrame([data], columns=['text'])
         if isinstance(data, list):
-            return pd.DataFrame(data, columns=['text']).astype(str)
+            mydf = pd.DataFrame(data, columns=['text']).astype(str)
         if isinstance(data, pd.DataFrame):
-            return data.astype(str)
+            mydf = data.astype(str)
+        zero_length_rows = mydf.iloc[:,0].str.len() == 0
+        number_of_zero_length_rows = sum(zero_length_rows)
+        if number_of_zero_length_rows > 0:
+            print(f"Warning: {number_of_zero_length_rows} rows have zero length and will be dropped")
+            mydf = mydf[~zero_length_rows]
+        
+        return mydf
