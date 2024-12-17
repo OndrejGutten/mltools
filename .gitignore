@@ -86,3 +86,4 @@ src/mltools/data/__pycache__/__init__.cpython-311.pyc
 src/mltools/data/__pycache__/data.cpython-311.pyc
 tests/__pycache__/__init__.cpython-311.pyc
 tests/__pycache__/test_utils.cpython-311-pytest-8.3.3.pyc
+tests/mltools/architecture/__pycache__/test_OCR_Evaluator.cpython-311-pytest-8.3.3.pyc
