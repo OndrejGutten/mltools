@@ -1,12 +1,12 @@
 import mltools
 import mlflow
 import pandas as pd
+import os 
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import FunctionTransformer
-
 
 def load_model(config):
     """
@@ -51,6 +51,8 @@ def setup_model(config):
     mlflow.pyfunc.PyFuncModel
         The model.
     """
+    path_prefix = mltools.utils.get_nested(config, ['global','root_path'], '')
+
     model_uri = mltools.utils.get_nested(config, ['model', 'uri'], None)
     if model_uri is not None:
         return load_model(model_uri)
@@ -65,13 +67,18 @@ def setup_model(config):
     ### class weights options
     has_class_weights = False
     class_weights_config_dict = mltools.utils.get_nested(config, ['model','class_weights'], None)
+    class_weights_dict = None
 
     if class_weights_config_dict is not None:
         has_class_weights = True
         class_weights_relative_or_absolute = mltools.utils.get_nested(class_weights_config_dict, ['relative_or_absolute'], 'absolute')
+
         class_weights_file_path = mltools.utils.get_nested(class_weights_config_dict, ['file_path'], None)
-        class_weights = pd.read_csv(class_weights_file_path, header=None)
-        class_weights_dict = {str(k):v for k,v in zip(class_weights.iloc[:,0], class_weights.iloc[:,1])}
+        if class_weights_file_path is None:
+            raise ValueError("Class weights file path not provided.")
+        
+        class_weights_full_file_path = os.path.join(path_prefix, class_weights_file_path)
+        class_weights_dict = mltools.utils.read_class_weights_from_file(class_weights_full_file_path)
 
     if model_type == "TF-IDF-KNN":
         baseline_classifier = KNeighborsClassifier(**parameters)
@@ -87,8 +94,14 @@ def setup_model(config):
         if has_class_weights:
             model.set_class_weights(class_weights_dict)
     elif model_type == "TF-IDF-XGBoost":
-        baseline_classifier = XGBClassifier(**parameters)
-        model = mltools.architecture.TF_IDF_XGBoost()
+        # load cost_matrix
+        cost_matrix = None
+        cost_matrix_filepath = mltools.utils.get_nested(config,['model','cost_matrix'], None)
+        if cost_matrix_filepath is not None:
+            cost_matrix_filepath = os.path.join(path_prefix, cost_matrix_filepath)
+            cost_matrix = mltools.utils.read_cost_matrix_from_file(cost_matrix_filepath)
+
+        model = mltools.architecture.TF_IDF_XGBoost_Classifier(model_name = model_name, parameters = parameters, class_weights = class_weights_dict, cost_matrix = cost_matrix)
     elif model_type == "TextPreprocessor":
         preprocessor = mltools.architecture.TextPreprocessor(**parameters)
         # prepare a version with required signature for mlflow
@@ -154,7 +167,7 @@ def load_model_info(config):
     ... }
     >>> model_info = load_model_info(config)
     """
-    model_uri = utils.get_nested(config, ['model', 'uri'], None)
+    model_uri = mltools.utils.get_nested(config, ['model', 'uri'], None)
     if model_uri is None:
         raise ValueError("Model uri not provided.")
 
@@ -182,3 +195,25 @@ def load_model_info_list(config):
     >>> models_metadata = load_model_info_list(config)
     """
     return [load_model_info({'model': {'uri' : model_uri}}) for model_uri in config['model_list']]
+
+def model_uri_to_version(model_uri):
+    """
+    Extract the version from a model URI.
+
+    Parameters
+    ----------
+    model_uri : str
+        The URI of the model.
+
+    Returns
+    -------
+    str
+        The version of the model.
+    
+    Examples
+    --------
+    >>> model_uri_to_version('runs:/abc123def/model')
+    'abc123def'
+    """
+    model_info = mlflow.models.get_model_info(model_uri)
+    return model_info.run_id

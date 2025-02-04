@@ -6,7 +6,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
 
-from mltools.architecture import BaseModel
+from mltools.architecture.utils import BaseModel
 
 # TODO: introduce calibrated classifier to the pipeline
 

@@ -1,5 +1,7 @@
 setup.py
 src/mltools/__init__.py
+src/mltools/logging.py
+src/mltools/metrics.py
 src/mltools/model.py
 src/mltools/utils.py
 src/mltools.egg-info/PKG-INFO

@@ -266,6 +266,8 @@ def get_dependencies_from_MLProject(project_file: str = 'MLproject') -> dict:
     # Extract pip dependencies (if conda_env)
     return env_content.get("dependencies", [])
 
+
+
 def get_run_name_from_model_uri(model_uri: str) -> str:
     """
     Extract the run name from a model URI.
@@ -324,3 +326,89 @@ def mlflow_get_logged_model_uris(run_id):
                 logged_model_uris.append(model_info.model_uri)
 
     return logged_model_uris
+
+def read_class_weights_from_file(filepath: str) -> dict:
+    """
+    Read class weights from a file.
+
+    Parameters
+    ----------
+    file : str
+        The path to the file.
+
+    Returns
+    -------
+    dict
+        A dictionary with class weights.
+
+    Examples
+    --------
+        >>> read_class_weights_from_file('class_weights.yaml')
+        {'class1': 0.1, 'class2': 0.2}
+    """
+    if not os.path.exists(filepath):
+        raise ValueError(f"Class weights file not found at {filepath}")
+    
+    class_weights = pd.read_csv(filepath, header=None)
+    if class_weights.shape[1] != 2:
+        raise ValueError("Class weights file must have 2 columns - class label (first) and its weight (second).")
+    class_weights_dict = {str(k):v for k,v in zip(class_weights.iloc[:,0], class_weights.iloc[:,1])}
+    return class_weights_dict
+
+def read_cost_matrix_from_file(filepath: str) -> pd.DataFrame:
+    """
+    Read a cost matrix from a file.
+
+    Parameters
+    ----------
+    file : str
+        The path to the file. First line and the first column must contain matching labels.
+
+    Returns
+    -------
+    pd.DataFrame
+        A cost matrix.
+
+    Examples
+    --------
+        % cat cost_matrix.csv
+        ,class1,class2
+        class1,0,1
+        class2,1,0
+        >>> read_cost_matrix_from_file('cost_matrix.csv')
+        pd.DataFrame([[0, 1], [1, 0]])
+
+        % cat cost_matrix.csv
+        ,class1,class2,class3
+        class1,0,1,1
+        class3,1,0,1
+        class2,1,1,0
+
+        >>> read_cost_matrix_from_file('cost_matrix.csv')
+        ValueError: Cost matrix must have the same index and columns.
+
+    """
+    if not os.path.exists(filepath):
+        raise ValueError(f"Cost matrix file not found at {filepath}")
+    
+    cost_matrix = pd.read_csv(filepath, header = 0, index_col = 0)
+    cost_matrix.columns = cost_matrix.columns.astype(str)
+    cost_matrix.index = cost_matrix.index.astype(str)
+    validate_cost_matrix(cost_matrix)
+    return cost_matrix
+
+def validate_cost_matrix(cost_matrix: pd.DataFrame):
+    if cost_matrix.shape[0] != cost_matrix.shape[1]:
+        raise ValueError("Cost matrix must be a square.")
+    
+    if not all(cost_matrix.index.astype(str) == cost_matrix.columns.astype(str)):
+        raise ValueError("Cost matrix must have the same index and columns.")
+    
+def get_unique_experiment_id_from_name(experiment_name: str):
+    experiments = mlflow.search_experiments(filter_string = f'name = "{experiment_name}"')
+    if len(experiments) == 0:
+        raise Exception(f'No experiment named {experiment_name} found')
+    elif len(experiments) > 1:
+        raise Exception(f'Multiple experiments named {experiment_name} found')
+    else:
+        return experiments[0].experiment_id

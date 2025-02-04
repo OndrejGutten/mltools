@@ -1,16 +1,16 @@
+import mltools
 import numpy as np
 import pandas as pd
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
 
-from .utils import BaseModel
+from mltools.architecture.utils import BaseModel
 
 # TODO: introduce calibrated classifier to the pipeline
 
-
+# TODO: Check if importing BaseModel like this works
 class TF_IDF_Classifier(BaseModel):
     def __init__(self, baseline_classifier: Pipeline, model_name: str, class_weights: dict = None):
         self.__repr__ = f"TF_IDF_Calibrated_Classifier - {model_name}"

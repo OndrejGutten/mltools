@@ -5,7 +5,7 @@ from mltools import utils
 import mlflow
 
 
-def read_data(config: dict):
+def read_data(config: dict, flatten = False):
     #TODO: always return a list of datasets (even if split_sizes argument is not provided)
     #TODO how to deal with multiple datasets when sometimes we need input/output but only read input
     """
@@ -16,6 +16,9 @@ def read_data(config: dict):
     config : dict
         A dictionary containing the configuration parameters. config['dataset'] is releveant for this function.
 
+    flatten : bool
+        Function may return multiple datasets. If flatten is True, the function will return a single list of datasets. If flatten is False, the function will return a list of lists of datasets.
+    
     Returns
     -------
     mlflow.data.PandasDataset
@@ -43,20 +46,24 @@ def read_data(config: dict):
     """
 
     dataset_block = utils.get_nested(config, ['dataset'], None)
-    datasets_block = utils.get_nested(config, ['datasets'], None)
+    dataset_list_block = utils.get_nested(config, ['dataset_list'], None)
 
-    if dataset_block is None and datasets_block is None:
-        raise ValueError('The dataset or datasets block is not provided - config[dataset] or config[datasets]')
+    if dataset_block is None and dataset_list_block is None:
+        raise ValueError('The dataset or datasets block is not provided - config[dataset] or config[dataset_list]')
     
-    if dataset_block is not None and datasets_block is not None:
-        raise ValueError('Both dataset and datasets blocks are provided - only one of config[dataset]/config[datasets] is allowed')
+    if dataset_block is not None and dataset_list_block is not None:
+        raise ValueError('Both dataset and datasets blocks are provided - only one of config[dataset]/config[dataset_list] is allowed')
     
     global_subblock = utils.get_nested(config, ['global'], {})
 
     if dataset_block is not None:
         return _read_single_dataset_from_config_subblock(dataset_block, global_subblock)
     else:
-        return [_read_single_dataset_from_config_subblock(subblock, global_subblock) for subblock in datasets_block]
+        list_of_lists_of_datasets = [_read_single_dataset_from_config_subblock(subblock, global_subblock) for subblock in dataset_list_block]
+        if flatten:
+            return [dataset for datasets in list_of_lists_of_datasets for dataset in datasets]
+        else:
+            return list_of_lists_of_datasets
 
 
 def _read_single_dataset_from_config_subblock(single_dataset_subblock: dict, global_subblock: dict):
