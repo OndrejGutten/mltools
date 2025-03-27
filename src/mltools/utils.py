@@ -412,3 +412,30 @@ def get_unique_experiment_id_from_name(experiment_name: str):
         raise Exception(f'Multiple experiments named {experiment_name} found')
     else:
         return experiments[0].experiment_id
+
+def attach_metadata_to_pandas_dataframe(df: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+    """
+    Attach metadata to a pandas DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        A pandas DataFrame.
+    metadata : dict
+        A dictionary with metadata.
+
+    Returns
+    -------
+    pd.DataFrame
+        A pandas DataFrame with metadata attached.
+
+    Examples
+    --------
+        >>> df = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
+        >>> metadata = {'author': 'Boaty McBoatface', 'description': 'A dataset with columns a and b'}
+        >>> attach_metadata_to_pandas_dataframe(df, metadata).attrs
+        {'author': 'Boaty McBoatface', 'description': 'A dataset with columns a and b'}
+    """
+    for key, value in metadata.items():
+        df.attrs[key] = value
+    return df

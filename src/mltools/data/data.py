@@ -3,6 +3,8 @@ from sklearn.model_selection import train_test_split
 import os
 from mltools import utils
 import mlflow
+import urllib
+import joblib
 
 
 def read_data(config: dict, flatten = False):
@@ -86,7 +88,10 @@ def _read_single_dataset_from_config_subblock(single_dataset_subblock: dict, glo
         file_to_value_mapping = utils.get_nested(single_dataset_subblock, ['mapping'], {})
         df = datareader_one_folder_per_sample(full_data_path, file_to_value_mapping)
     elif format_subblock == 'mlflow_run':
-        raise NotImplementedError('The format \'mlflow_run\' is not implemented yet.')
+        id = utils.get_nested(single_dataset_subblock, ['id'], None)
+        dataset_name = utils.get_nested(single_dataset_subblock, ['name'], None)
+        version = utils.get_nested(single_dataset_subblock, ['version'], None)
+        datareader_from_mlflow_run(uri=id, dataset_name=dataset_name, version=version)
     elif format_subblock == 'from_file':
         if not os.path.exists(full_data_path):
             raise FileNotFoundError(
@@ -328,10 +333,61 @@ def datareader_from_file(file_path: str):
         raise NotImplementedError(f'Unsupported file format: {extension}')
     return df
 
-def datareader_from_mlflow_run(run_id):
-    # TODO:
-    pass
+def datareader_from_mlflow_run(id : str = None, dataset_name : str = None, version : int = None):
+    """
+    Parameters
+    ----------
+    id : str
+        Run id of the run containing the dataset. If not provided, dataset_name must be provided.
+    dataset_name : str
+        The name of the dataset. If not provided, id must be provided.
+    version : int
+        The version of the dataset. The version is determined automatically when logging the dataset. If not provided, the latest version is used.
 
+    Returns
+    -------
+    mlflow.data.Dataset
+        mlflow Dataset object, including metadata
+
+    Examples
+    --------    
+    >>> id = 'run_id'
+    >>> dataset = datareader_from_mlflow_run(id)
+    >>> dataset_name = 'dataset_name'
+    >>> dataset = datareader_from_mlflow_run(dataset_name=dataset_name)
+    >>> version = 2
+    >>> dataset = datareader_from_mlflow_run(dataset_name=dataset_name, version=version)
+    """
+    
+    server_uri = mlflow.get_tracking_uri()
+
+    if id is not None:
+        dataset_string = 'get-artifact?path=dataset/dataset_' + id + '.joblib&run_uuid=' + id
+        dataset_url = urllib.parse.urljoin(server_uri, dataset_string)
+        return joblib.load(urllib.request.urlopen(dataset_url))
+
+    if dataset_name is not None:
+        runs_with_dataset_name = mlflow.search_runs(experiment_names=['DATASETS'], filter_string=f'run_name = "{dataset_name}"')
+        if len(runs_with_dataset_name) == 0:
+            raise Exception('No runs with the given name found')
+        
+        if version is not None:
+            if not 'tags.version' in runs_with_dataset_name.columns:
+                raise Exception(f'Datasets named f{dataset_name} do not have version tags')
+            
+            run_with_desired_version = runs_with_dataset_name[runs_with_dataset_name['tags.version'] == str(version)]
+            if run_with_desired_version.shape[0] == 0:
+                raise Exception(f'Dataset named {dataset_name} does not have version {version}')
+            
+            run_id = run_with_desired_version['run_id'].iloc[0]
+        else:
+            run_id = runs_with_dataset_name['run_id'].iloc[0]
+
+        dataset_string = 'get-artifact?path=dataset/dataset_' + run_id + '.joblib&run_uuid=' + run_id
+        dataset_url = urllib.parse.urljoin(server_uri, dataset_string)
+        return joblib.load(urllib.request.urlopen(dataset_url))
+        
+    raise Exception('Either dataset id or name must be provided')
 
 
 def pandas_split_categorical_data(df: pd.DataFrame, sizes: list[float] = [0.8, 0.2], stratified: bool = False, target_column: str = None, random_state: int = 42):

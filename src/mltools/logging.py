@@ -1,10 +1,14 @@
 # This module contains helper functions that allow easy and consistent logging of experiments to mlflow.
 
+import mlflow.data.dataset_registry
 import mltools
 import mlflow
 import requests
 import pandas as pd
 import numpy as np
+import yaml
+import os
+import joblib
 from copy import copy
 from sklearn.metrics import classification_report, confusion_matrix, brier_score_loss, RocCurveDisplay
 from sklearn.preprocessing import LabelBinarizer
@@ -47,7 +51,6 @@ def require_run_started():
     except Exception as e:
         return False
     return True
-    
 
 
 #TODO: docs + tests
@@ -276,3 +279,68 @@ def log_model(model, model_name: str, X_example, y_example, pip_requirements: li
         input_example=X_example,
         **kwargs
     )
+
+def log_pandas_dataset(dataset: mlflow.data.pandas_dataset.PandasDataset):
+    """
+    Parameters
+    ----------
+    dataset : mlflow.data.PandasDataset
+        The dataset to log. The dataset is expected to contain a pandas DataFrame with attrs with at least the following entries: author, description, project_name.
+
+    Returns
+    -------
+    run_id : str
+        The id of the run that was created to log the dataset.
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
+    >>> df.attrs['author'] = 'John Doe'
+    >>> df.attrs['description'] = 'A dataset with some numbers'
+    >>> df.attrs['project_name'] = 'My project'
+    >>> dataset = mlflow.data.from_pandas(df, targets='b', name='my_dataset')
+    >>> run_id = mltools.logging.log_dataset(dataset)
+    """
+
+    if not mltools.logging.is_remote_mlflow_server_running():
+        raise Exception('Mlflow server not reachable. Have you set the tracking uri?')
+    
+    # check for DATASETS experiment, create if necessary
+    experiments = mlflow.search_experiments(filter_string = f'name = "DATASETS"')
+    if len(experiments) > 1:
+        raise Exception('Multiple experiments with name "DATASETS" found')
+    if len(experiments) == 0:
+        experiment_id = mlflow.create_experiment(name='DATASETS')
+    else:
+        experiment_id = experiments[0].experiment_id
+
+    # create a run with the name of the dataset. If a run with the same name already exists count them and add 1, resulting in a version to be stored as tag and metadata
+    author = dataset.df.attrs['author'] if 'author' in dataset.df.attrs else None
+    if not 'description' in dataset.df.attrs:
+        raise Exception('Logging a dataset without a description is unacceptable. Shame!')
+    description = dataset.df.attrs['description'] 
+    project_name = dataset.df.attrs['project_name'] if 'project_name' in dataset.df.attrs else None
+    runs_with_this_name = mlflow.search_runs(experiment_ids=experiment_id, filter_string = f'run_name = "{dataset.name}"')
+    run_id = mltools.logging.create_run(run_name = dataset.name, author = author, description= description, task_type= 'data_logging', project_name=project_name, experiment_id=experiment_id)
+    version = len(runs_with_this_name) + 1
+    mlflow.set_tag('version', version)
+
+    # log the metadata and the dataset. If DataSource is not set (or set to CodeDataSource) set its source to the new uri
+    mlflow.log_input(dataset)
+    temporary_local_filename = f'dataset_{run_id}.joblib'
+    joblib.dump(dataset, temporary_local_filename)
+    mlflow.log_artifact(local_path=f'dataset_{run_id}.joblib', artifact_path='dataset')
+    os.remove(temporary_local_filename)
+    
+    # create yaml file with metadata for readability
+    metadata = {**dataset.df.attrs, 'version': version}
+    with open('metadata.yaml', 'w') as file:
+        yaml.dump(metadata, file)
+    mlflow.log_artifact(local_path = 'metadata.yaml', artifact_path='dataset')
+    os.remove('metadata.yaml')
+
+    mlflow.end_run()
+
+    return run_id
+
+
