@@ -2,6 +2,7 @@ build
 # Ignore Python bytecode
 __pycache__/
 *.py[cod]
+src/mltools.egg-info
 mltools/mltools.egg-info
 mltools.egg-info
 .DS_Store
