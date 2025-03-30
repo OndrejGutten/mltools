@@ -439,3 +439,31 @@ def attach_metadata_to_pandas_dataframe(df: pd.DataFrame, metadata: dict) -> pd.
     for key, value in metadata.items():
         df.attrs[key] = value
     return df
+
+def read_csv_assuming_N_fields(file: str, sep = ' ', N = 0):
+    '''
+    Imitate pd.read_csv but only recognize the first N delimiters of each line. Everything else should be bundled into the last field.
+
+    Parameters:
+    file: str
+        The file to read.
+    sep: str
+        The delimiter.
+    N: int  
+        The number of fields to read. If N = 0, read all fields.
+    header: list
+        The header of the file. If None, the first line of the file is used as the header.
+
+    Returns:
+    pd.DataFrame
+        The data frame.
+
+    '''
+    import pandas as pd
+    with open(file, 'r') as f:
+        if N == 0:
+            data = [line.strip().split(sep) for line in f]
+        else:
+            data = [line.strip().split(sep, N) for line in f]
+    return pd.DataFrame(data)
+    
