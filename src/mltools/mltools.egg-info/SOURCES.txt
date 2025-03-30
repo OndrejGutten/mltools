@@ -1,8 +1,0 @@
-setup.py
-src/architecture/TF_IDF_KNN.py
-src/architecture/__init__.py
-src/mltools.egg-info/PKG-INFO
-src/mltools.egg-info/SOURCES.txt
-src/mltools.egg-info/dependency_links.txt
-src/mltools.egg-info/requires.txt
-src/mltools.egg-info/top_level.txt
