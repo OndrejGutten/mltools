@@ -10,6 +10,7 @@ class FeatureAutomat(interface.FeatureAutomat):
     def __init__(self,
                  primary_db_connector : interface.DB_Connector,
                  feature_store_connector : interface.DB_Connector,
+                 report_name: str,
                  ):
         self.primary_db_connector = primary_db_connector
         self.feature_store_connector = feature_store_connector
@@ -17,7 +18,7 @@ class FeatureAutomat(interface.FeatureAutomat):
         self.compute_kwargs = {}
         self.feature_calculators = {}
 
-        self.report = report.Report()
+        self.report = report.Report(report_name)
 
         try:
             self.primary_db_connector.connect()
@@ -37,7 +38,7 @@ class FeatureAutomat(interface.FeatureAutomat):
 
         # obtain input data for feature calculation
         # This function needs to be implemented in the subclass
-        self.compute_universal_kwargs(self.entities_to_calculate, self.reference_times) # sets self.compute_kwargs with necessary data for feature calculation
+        self.compute_universal_kwargs(entities_to_calculate=entities_to_calculate, reference_times=reference_times) # sets self.compute_kwargs with necessary data for feature calculation
 
         # compute features
         for feature_calculator in self.feature_calculators.values():
