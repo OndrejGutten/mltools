@@ -10,3 +10,4 @@ setup.py
 setup_legacy.py
 notebooks/*
 test.py
+dist
