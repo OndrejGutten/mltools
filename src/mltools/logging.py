@@ -9,6 +9,7 @@ import numpy as np
 import yaml
 import os
 import joblib
+import uuid
 from copy import copy
 from sklearn.metrics import classification_report, confusion_matrix, brier_score_loss, RocCurveDisplay
 from sklearn.preprocessing import LabelBinarizer
@@ -49,7 +50,7 @@ def require_run_started():
     try:
         run_id = mlflow.active_run().info.run_id
     except Exception as e:
-        return False
+        raise Exception('No active mlflow run. Please start a run before logging.')
     return True
 
 
@@ -241,7 +242,7 @@ def evaluate_classification(model, X_test, y_test, metrics: list = ['classificat
         mlflow.log_artifact('confidence_accuracy_curve.png')
     
 
-def log_model(model, model_name: str, X_example, y_example, pip_requirements: list | str = None, conda_yaml: str = None):
+def log_model(model, model_name: str, X_example, y_example, pip_requirements: list | str = None, conda_yaml: str = None, servable: bool = True):
     '''
     Simplify logging a model to mlflow.
 
@@ -265,13 +266,24 @@ def log_model(model, model_name: str, X_example, y_example, pip_requirements: li
     conda_yaml: str
         Path to a conda yaml file.
         Optional.
+    
+    servable: bool
+        Whether the model should be logged as a servable model. If True, the model will be wrapped in a PyfuncMlflowWrapper.
+        Optional, default is True.
     '''
+
+    require_run_started()
+
     kwargs = {
         'pip_requirements': pip_requirements,
         'conda_env': conda_yaml
     }
+    model_to_log = model if not servable else mltools.architecture.PyfuncMlflowWrapper(model)
+    
+    mlflow.set_tag('model_id', str(uuid.uuid4()))
+    
     mlflow.pyfunc.log_model(
-        python_model=mltools.architecture.PyfuncMlflowWrapper(model),
+        python_model=model_to_log,
         artifact_path='model',
         registered_model_name=model_name,
         signature=mlflow.models.infer_signature(
@@ -279,6 +291,7 @@ def log_model(model, model_name: str, X_example, y_example, pip_requirements: li
         input_example=X_example,
         **kwargs
     )
+
 
 def log_pandas_dataset(dataset: mlflow.data.pandas_dataset.PandasDataset):
     """

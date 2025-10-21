@@ -1,3 +1,5 @@
+import numpy as np
+import datetime
 import os
 from functools import reduce
 import mlflow
@@ -467,3 +469,33 @@ def read_csv_assuming_N_fields(file: str, sep = ' ', N = 0):
             data = [line.strip().split(sep, N) for line in f]
     return pd.DataFrame(data)
     
+def sanitize_timestamps(df: pd.DataFrame):
+    datetime_columns = df.select_dtypes(include=['datetime64', '<M8']).columns
+    sanitized_df = pd.DataFrame()
+    for col in df.columns:
+        if col in datetime_columns:
+            sanitized_df.loc[:,col] = df.loc[:,col].dt.floor('s').astype('datetime64[ns]') 
+        else:
+            sanitized_df.loc[:,col] = df.loc[:,col]
+    return sanitized_df
+
+def to_array(value, dtype = None):
+    if isinstance(value, np.ndarray):
+        return value if dtype is None else value.astype(dtype)
+    if isinstance(value, pd.Series):
+        return value.to_numpy() if dtype is None else value.to_numpy(dtype=dtype)
+    if isinstance(value, list):
+        return np.array(value) if dtype is None else np.array(value, dtype=dtype)
+    if isinstance(value, set):
+        return np.array(list(value)) if dtype is None else np.array(list(value), dtype=dtype)
+    else:
+        return np.array([value]) if dtype is None else np.array([value], dtype=dtype) 
+
+def to_datetime_array(value):
+    array = to_array(value)
+    if not np.all([isinstance(x, datetime.datetime) for x in array]):
+        modified = pd.to_datetime(array).to_pydatetime()
+        return modified
+    else:
+        return array
+

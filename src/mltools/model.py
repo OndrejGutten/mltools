@@ -2,20 +2,27 @@ import mltools
 import mlflow
 import pandas as pd
 import os 
+import yaml
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import FunctionTransformer
 
-def load_model(config):
+import mltools.logging
+
+def load_model(config = None, model_uri = None, model_id = None):
     """
-    Load a model and model info from the uri provided in the config.
+    Load a model using a config or model_uri or model_id. Only one may be provided.
 
     Parameters
     ----------
     config : dict
-        A dictionary containing the configuration parameters. config['model'] is relevant for this function. It must contain the uri of the model, any other entries will be ignored.
+        A dictionary containing the configuration parameters. config['model'] is relevant for this function. It must contain the uri of the model, any other entries will be ignored. If provided, model_uri and model_id must not be provided.
+    model_uri : str
+        The URI of the model. If provided, config must not be provided.
+    model_id : str
+        The ID of the model. Stored as a 'model_id' tag in mlflow registry. If provided, config and model_uri must not be provided.
 
     Returns
     -------
@@ -30,12 +37,31 @@ def load_model(config):
     ... }
     >>> model, model_info = load_model(config)
     """
-    model_uri = mltools.utils.get_nested(config, ['model', 'uri'], None)
-    if model_uri is None:
-        raise ValueError("Model uri not provided.")
 
-    pyfunc_model = mlflow.pyfunc.load_model(model_uri)
-    return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
+    if (config is not None) + (model_uri is not None) + (model_id is not None) != 1:
+        raise ValueError("Exactly one of config, model_uri or model_id must be provided.")
+    
+    if model_id is not None:
+        # find model by tag
+        all_models = mlflow.search_model_versions()
+        matching_models = [model for model in all_models if 'model_id' in model.tags and model.tags['model_id'] == model_id]
+        if len(matching_models) == 0:
+            raise ValueError(f"No model found with model_id {model_id}.")
+        elif len(matching_models) > 1:
+            raise ValueError(f"Multiple models found with model_id {model_id}. Please specify a more specific identifier.")
+        else:
+            model_uri = matching_models[0].source + '/model'
+    elif model_uri is None:
+        pyfunc_model = mlflow.pyfunc.load_model(model_uri)
+        return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
+    elif config is not None:
+        model_uri = mltools.utils.get_nested(config, ['model', 'uri'], None)
+        if model_uri is None:
+            raise ValueError("Model uri not provided.")
+
+        pyfunc_model = mlflow.pyfunc.load_model(model_uri)
+        return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
+
 
 def setup_model(config):
     """
@@ -217,3 +243,165 @@ def model_uri_to_version(model_uri):
     """
     model_info = mlflow.models.get_model_info(model_uri)
     return model_info.run_id
+
+def download_model_artifact(artifact_name, model_uri = None, model_name = None, model_version = None, model_alias = None):
+    """
+    Download an artifact stored in the model's home path.
+
+    Parameters
+    ----------
+    artifact_name : str
+        The name of the artifact to load.
+    model_uri : str
+        The URI of the model. If provided, other model parameters must not be provided.
+    model_name : str, optional
+        The name of the model. If provided, either model_version or model_alias must also be provided.
+    model_version : str, optional
+        The version of the model. Only to be used with model_name. If provided, model alias must not be provided.
+    model_alias : str, optional
+        The alias of the model. Only to be used with model_name. If provided, model version must not be provided.
+    
+    Returns
+    -------
+
+    """
+
+    if not mltools.logging.is_remote_mlflow_server_running():
+        raise RuntimeError("MLflow server is not running. Cannot load model artifact.")
+
+    if model_uri is not None:
+        if model_name is not None or model_version is not None or model_alias is not None:
+            raise ValueError("If model_uri is provided, model_name, model_version and model_alias must not be provided.")
+        model_info = mlflow.models.get_model_info(model_uri)
+        artifact = mlflow.artifacts.download_artifacts(run_id = model_info.run_id, artifact_path = f'{model_info.artifact_path}/{artifact_name}')
+        return artifact
+    else:
+        if model_name is None:
+            raise ValueError("Either model_uri or model_name+version/alias must be provided.")
+        if model_version is None and model_alias is None:
+            raise ValueError("If model_name is provided, either model_version or model_alias must be provided.")
+        if model_version is not None and model_alias is not None:
+            raise ValueError("If model_name is provided, either model_version or model_alias must be provided, not both.")
+        if model_version is not None:
+            client = mlflow.MlflowClient()
+            model_version = client.get_model_version(model_name, model_version)
+        elif model_alias is not None:
+            client = mlflow.MlflowClient()
+            model_version = client.get_model_version_by_alias(model_name, model_alias)
+
+        # TODO: list artifacts first and check if the artifact exists
+
+        artifact = mlflow.artifacts.download_artifacts(artifact_uri = model_version.source + '/' + artifact_name)
+        return artifact
+
+def get_model_name_from_uri(uri: str) -> str:
+    """
+    Extract the model name from a model URI.
+
+    Parameters
+    ----------
+    uri : str
+        The URI of the model.
+    Returns
+    -------
+    str
+        The name of the model.
+    """
+
+    if uri.startswith("models:/"):
+        uri_body = uri[len("models:/"):]
+        if "@" in uri_body:
+            model_name = uri_body.split("@")[0]
+        elif "/" in uri_body:
+            model_name = uri_body.split("/")[0]
+        else:
+            model_name = uri_body
+        return model_name
+    else:
+        raise ValueError(f"Unsupported model URI format: {uri}")
+    
+def model_uri_to_run_id(uri: str) -> str:
+    """
+    Extract the run ID from a model URI.
+
+    Parameters
+    ----------
+    uri : str
+        The URI of the model.
+
+    Returns
+    -------
+    str
+        The run ID of the model.
+
+    Raises
+    ------
+    ValueError
+        If the URI does not contain a run ID.
+    """
+
+    if not mltools.logging.is_remote_mlflow_server_running():
+        raise RuntimeError("MLflow server is not running. Cannot extract run ID.")
+    
+    model_info = mlflow.models.get_model_info(uri)
+
+    return model_info.run_id
+
+def run_id_to_model_uri(run_id: str) -> str:
+    """
+    Convert a run ID to a model URI.
+
+    Parameters
+    ----------
+    run_id : str
+        The run ID of the model.
+
+    Returns
+    -------
+    str
+        The model URI.
+    
+    Raises
+    ------
+    ValueError
+        If the run ID is not found.
+    """
+    
+    if not mltools.logging.is_remote_mlflow_server_running():
+        raise RuntimeError("MLflow server is not running. Cannot convert run ID to model URI.")
+
+    run_id_associated_with_model = run_id in [version.run_id for version in mlflow.search_model_versions()]
+
+    if run_id_associated_with_model is False:
+        raise ValueError(f"Run ID {run_id} is not associated with any model.")
+    
+    return mlflow.models.get_model_info(f"runs:/{run_id}/model").model_uri
+
+def get_model_features(model_uri: str) -> list[str]:
+    """
+    Get list of models' features' metadata addresses.
+
+    Parameters
+    ----------
+    model_uri : str
+        The URI of the model.
+
+    Returns
+    -------
+    list[str]
+        A list of metadata addresses of model's features.
+    
+    Raises
+    ------
+    ValueError
+        If the model does not have a 'feature_names' attribute.
+    """
+    try:
+        model_feature_address_path = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
+        model_feature_addresses = yaml.safe_load(open(model_feature_address_path, "r"))
+        os.remove(model_feature_address_path)  # clean up downloaded file
+    except Exception as e:
+        print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
+    
+    # add feature to dictionary + set
+    return model_feature_addresses if isinstance(model_feature_addresses, list) else [model_feature_addresses]

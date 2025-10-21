@@ -1,7 +1,7 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import os
-from mltools import utils
+from mltools.utils import utils
 import mlflow
 import urllib
 import joblib

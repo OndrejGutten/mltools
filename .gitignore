@@ -6,3 +6,7 @@ src/mltools.egg-info
 mltools/mltools.egg-info
 mltools.egg-info
 .DS_Store
+setup.py
+setup_legacy.py
+notebooks/*
+test.py

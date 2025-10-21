@@ -10,7 +10,7 @@ import re
 import logging
 import nltk
 import pandas as pd
-from mltools import utils
+from mltools.utils import utils
 
 # TODO: replace stopwords with mask tokens
 

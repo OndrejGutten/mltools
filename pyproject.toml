@@ -1,0 +1,25 @@
+[project]
+name = "mltools"
+version = "0.3.0"
+description = "A collection of utility functions for handling data and intermediate operations in MLOps."
+authors = [
+    {name = "Ondrej Gutten",email = "ondrogutten@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "nltk (>=3.9.1,<4.0.0)",
+    "regex (>=2025.7.34,<2026.0.0)",
+    "simplemma (>=1.1.2,<2.0.0)",
+    "transformers (>=4.55.3,<5.0.0)",
+    "xgboost (>=3.0.4,<4.0.0)",
+    "sqlalchemy (>=2.0.43,<3.0.0)",
+    "fsspec (>=2024.3.1)",
+    "regex (>=2.5.154)",
+    "tqdm (>=4.66.2)",
+
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
