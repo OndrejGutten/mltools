@@ -1,6 +1,6 @@
 import datetime
 import numpy as np
-from mltools.utils import errors, utils as general_utils
+from mltools.utils import errors, report, utils as general_utils
 from mltools.feature_store.utils import utils
 import mltools.feature_store.core.interface as interface
 from mltools.feature_store.core import FeatureCollector
@@ -16,6 +16,8 @@ class FeatureAutomat(interface.FeatureAutomat):
 
         self.compute_kwargs = {}
         self.feature_calculators = {}
+
+        self.report = report.Report()
 
         try:
             self.primary_db_connector.connect()
