@@ -1,0 +1,63 @@
+name: Nightly (auto on commit)
+
+on:
+  push:
+    branches:
+      - main # run whenever you push to main
+  workflow_dispatch: {} # allow manual trigger too
+
+jobs:
+  nightly-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full history for retagging
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: python -m pip install -U build
+
+      - name: Update version to nightly timestamp
+        run: |
+          python - <<'PY'
+          import re, datetime, pathlib
+          path = pathlib.Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+          ts = datetime.datetime.utcnow().strftime("%Y%m%d%H%M")
+          text = re.sub(r'(?m)^version\s*=\s*"[0-9][^"]*"',
+                        f'version = "0.1.0.dev{ts}"', text)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Move "nightly" tag to this commit
+        run: |
+          git tag -f nightly
+          git push -f origin nightly
+
+      - name: Upload to Nightly release (overwrite old assets)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          draft: false
+          generate_release_notes: false
+          append_body: false
+          make_latest: false
+          fail_on_unmatched_files: false
+          clobber: true # overwrite old assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
