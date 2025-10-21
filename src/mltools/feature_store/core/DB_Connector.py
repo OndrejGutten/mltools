@@ -166,14 +166,14 @@ class DB_Connector_Template(interface.DB_Connector):
         )
 
         # changed rows:
-        #  value_column_new != value_column_current
-        #  value_column_new is not null and value_column_current is not null
-        # TODO: check if entry exists for entity at all - if not, it should be added even if it is NaN
-        #all_values_df
-
-        both_not_null = feature_plus_latest_df[value_column + '_new'].notnull().to_numpy() & feature_plus_latest_df[value_column + '_current'].notnull().to_numpy()
+        # new value has to be different for the update to happen (~equal_values)
+        # if any value is null/NA the != operator returns True.
+        # We actually want to write all these cases except when both values were calculated to be null.
+        # This is equivalent to (both_values_null & old_value_calculated) because new_value_calculate is always True (otherwise it would not be part of the result in merge_asof)
         equal_values = (feature_plus_latest_df[value_column + '_new'] == feature_plus_latest_df[value_column + '_current']).to_numpy()
-        update_mask = (~equal_values & both_not_null) # | first_record_mask
+        old_value_calculated = feature_plus_latest_df['calculation_time_current'].notna()
+        both_values_null = feature_plus_latest_df[value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[value_column + '_current'].isnull().to_numpy()
+        update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
         changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,groupby_key].to_numpy()
         update_df = feature_df[feature_df[groupby_key].isin(changed_rows_entities)]
         if len(changed_rows_entities) == 0:
