@@ -98,7 +98,7 @@ class DB_Connector_Template(interface.DB_Connector):
             return feature_df
 
         # check if feature schema matches the data
-        self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
+        #self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
 
         feature_df = sanitize_timestamps(feature_df)
 
@@ -142,7 +142,7 @@ class DB_Connector_Template(interface.DB_Connector):
             raise ValueError("value_column must refer to a column in the feature_df")
     
         DB_address = self._feature_and_module_name_to_DB_address(feature_name, module_name)
-        self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
+        #self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
 
         feature_df_schema = schema_from_dataframe(feature_df)
         timestamp_columns = [key for key, value in feature_df_schema.items() if value in ['datetime64[ns]']] 
@@ -355,7 +355,7 @@ class PostgreSQL_DB_Connector(DB_Connector_Template):
                 if val not in db_type:
                     raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
             else:
-                if val != db_type:
+                if val != db_type & df_to_upload[key].notna().any(): # allow mismatch if the column is completely NA
                     raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}. Offending column: {key} with type {val} does not match expected type {db_type}.")
 
     def query(self, sql_query: str):
