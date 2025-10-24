@@ -51,7 +51,7 @@ def load_model(config = None, model_uri = None, model_id = None):
             raise ValueError(f"Multiple models found with model_id {model_id}. Please specify a more specific identifier.")
         else:
             model_uri = matching_models[0].source + '/model'
-    elif model_uri is None:
+    elif model_uri is not None:
         pyfunc_model = mlflow.pyfunc.load_model(model_uri)
         return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
     elif config is not None:

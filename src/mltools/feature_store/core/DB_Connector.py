@@ -1,7 +1,9 @@
 import sqlite3
 import pandas as pd
+import numpy as np
 import datetime
 import sqlalchemy
+
 from abc import abstractmethod
 
 from mltools.utils.utils import sanitize_timestamps
@@ -183,7 +185,31 @@ class DB_Connector_Template(interface.DB_Connector):
             self._to_sql(update_df, DB_address, self.engine)
             print(f"Changes detected for feature '{feature_name}'. Writing {update_df.shape[0]} rows to database.")
             return update_df
+    '''
+    def _split_multifeature(feature_df : pd.DataFrame, data_columns : list[str]):
+        #TODO: would be more consistent to use feature.attribute_names instead of data_columns argument
+        """
+        Splits a DataFrame with multiple features into separate DataFrames for each feature.
+        Assumes that the Dataframe has
+            - data columns - for each of these a separate DataFrame will be created
+            - 'non_data_columns' - these columns will be copied in all resulting DataFrames
+        """
+        # Identify data columns and non-data columns
+        if len (data_columns) == 0:
+            raise ValueError("No data columns found in the DataFrame. Are non_data_columns specified correctly?")
+        if not np.all(data_column in feature_df.columns for data_column in data_columns):
+            raise ValueError(f"Some data columns are not present in the DataFrame: {set(data_columns) - set(feature_df.columns)}")
+        if len (data_columns) == 1:
+            # If there is only one data column, return the original DataFrame
+            return [feature_df]
+        split_dfs = []
+        for data_column in data_columns:
+            other_data_columns = [col for col in data_columns if col != data_column]
+            split_df = feature_df.drop(columns=other_data_columns).copy()
+            split_dfs.append(split_df)
 
+        return split_dfs
+    '''
     def _create_table_from_feature(self, DB_address : str, feature_df : pd.DataFrame):
         feature_df = sanitize_timestamps(feature_df)
         # given a dataframe, create a table in the DB
