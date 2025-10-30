@@ -17,13 +17,25 @@ class DatesToTimedeltasPreprocessor(BaseEstimator, TransformerMixin):
         self.time_unit = time_unit
 
         if self.time_unit == 'seconds':
-            self.change_units = lambda timedeltas: timedeltas
+            self.change_units = self._seconds_to_seconds
         elif self.time_unit == 'days':
-            self.change_units = lambda timedeltas: timedeltas / 86400
+            self.change_units = self._seconds_to_days
         elif self.time_unit == 'years':
-            self.change_units = lambda timedeltas: timedeltas / (86400 * 365.25)
+            self.change_units = self._seconds_to_years  
         else:
             raise ValueError("Invalid time unit. Choose from 'seconds', 'days', or 'years'.")
+
+    def _seconds_to_seconds(self, timedeltas):
+        return timedeltas
+    def _seconds_to_days(self, timedeltas):
+        return timedeltas / 86400
+    def _seconds_to_years(self, timedeltas):
+        return timedeltas / (86400 * 365.25)
+
+    def _vectorize_timedelta_total_seconds(self, timedeltas):
+        def total_seconds_or_nan(td):
+            return td.total_seconds() if pd.notna(td) else np.nan
+        return np.vectorize(total_seconds_or_nan)(timedeltas)
 
     def fit(self, X, y=None):
         return self
@@ -44,12 +56,10 @@ class DatesToTimedeltasPreprocessor(BaseEstimator, TransformerMixin):
         elif len(reference_times) != df.shape[0]:
             raise ValueError("Reference timestamps must be either a single datetime or a list of the same length as the column.")
 
-        get_total_seconds = np.vectorize(lambda obj: obj.total_seconds())
-
         for col in timestamp_columns:
             dates = utils.to_datetime_array(df[col])
             timedeltas = reference_times - dates
-            timedeltas = get_total_seconds(timedeltas)
+            timedeltas = self._vectorize_timedelta_total_seconds(timedeltas)
             timedeltas = self.change_units(timedeltas)
             df[col] = timedeltas
         return df

@@ -14,6 +14,7 @@ from copy import copy
 from sklearn.metrics import classification_report, confusion_matrix, brier_score_loss, RocCurveDisplay
 from sklearn.preprocessing import LabelBinarizer
 from matplotlib import pyplot as plt
+from typing import Literal
 
 def is_remote_mlflow_server_running(verbose: bool = False):
     '''
@@ -242,7 +243,7 @@ def evaluate_classification(model, X_test, y_test, metrics: list = ['classificat
         mlflow.log_artifact('confidence_accuracy_curve.png')
     
 
-def log_model(model, model_name: str, X_example, y_example, pip_requirements: list | str = None, conda_yaml: str = None, servable: bool = True):
+def log_model(model, model_name: str, X_example, y_example, pip_requirements: list | str = None, conda_yaml: str = None, servable: bool = True, on_error_signature : Literal['raise','ignore'] = 'raise'):
     '''
     Simplify logging a model to mlflow.
 
@@ -282,13 +283,22 @@ def log_model(model, model_name: str, X_example, y_example, pip_requirements: li
     
     mlflow.set_tag('model_id', str(uuid.uuid4()))
     
+    if on_error_signature not in ['raise','ignore']:
+        raise Exception('on_error_signature must be either "raise" or "ignore"')
+    
+    try:
+        signature = mlflow.models.infer_signature(X_example, y_example, params={'predict_method': 'predict'})
+    except Exception as e:
+        if on_error_signature == 'ignore':
+            signature = None
+        elif on_error_signature == 'raise':
+            raise Exception('Failed to infer model signature. Please make sure that X_example and y_example are valid inputs for the model. Original error: ' + str(e))
+
     mlflow.pyfunc.log_model(
         python_model=model_to_log,
         artifact_path='model',
         registered_model_name=model_name,
-        signature=mlflow.models.infer_signature(
-            X_example, y_example, params={'predict_method': 'predict'}),
-        input_example=X_example,
+        signature=signature,
         **kwargs
     )
 
