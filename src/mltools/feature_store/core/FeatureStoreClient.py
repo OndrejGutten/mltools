@@ -351,7 +351,7 @@ class FeatureStoreClient():
                             )
 
             with self.engine.connect() as conn:
-                pass
+                self._create_all()
             print(f"✅ Connected to database at {self.db_path}")
         except Exception as e:
             print(f"❌ Error connecting to database: {e}")
