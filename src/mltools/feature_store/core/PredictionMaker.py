@@ -1,6 +1,6 @@
 import datetime
 import yaml
-from mltools.feature_store.core import DB_Connector, FeatureCollector
+from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
 from mltools.utils import utils
 import os
 import mlflow
@@ -39,8 +39,8 @@ class PredictionMaker:
 
         # create DB connections
         # NOTE: hardcoded PostgreSQL for now
-        self.feature_store_connector = DB_Connector.PostgreSQL_DB_Connector(feature_store_connection_string)
-        self.feature_store_connector.connect()
+        self.feature_store_client = FeatureStoreClient.FeatureStoreClient(feature_store_connection_string)
+        self.feature_store_client.connect()
 
         # check yaml paths
         if not os.path.exists(self.credentials_yaml_path):
@@ -114,7 +114,7 @@ class PredictionMaker:
             model_to_features[model_uri] = model_feature_addresses
 
         # collect features
-        feature_collector = FeatureCollector.FeatureCollector(feature_store_connector=self.feature_store_connector, path_to_feature_logic=self.path_to_feature_logic)
+        feature_collector = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic=self.path_to_feature_logic)
         all_features_df, matched_df, stale_df = feature_collector.collect_features(
             entities_to_collect=entities,
             reference_times=reference_times,
@@ -147,15 +147,17 @@ class PredictionMaker:
             # load model from mlflow
             model = mltools.model.load_model({'model' : {'uri' : model_uri}})
             predictions = model.predict_proba(model_ok_inputs)
+            # translate model_uri to ID
+            model_id = self.feature_store_client.assign_model_id(model_uri=model_uri)
             # log predictions to DB
             predictions_df = pd.DataFrame({
                 entities_id_column: model_ok_inputs.index,
                 'prediction': predictions,
-                'model_uri': model_uri,
+                'model_id': model_id,
                 'reference_time': reference_times[valid_inputs_mask],
                 'calculation_time': datetime.datetime.now()
             })
-            self.feature_store_connector.update_feature(feature_name=feature_name, module_name=module_name, feature_df=predictions_df, value_column='prediction', groupby_key=entities_id_column)
+            self.feature_store_client.update_feature(feature_name=feature_name, module_name=module_name, feature_df=predictions_df, value_column='prediction', groupby_key=entities_id_column)
 
     def report(self, report_path: str):
         pass

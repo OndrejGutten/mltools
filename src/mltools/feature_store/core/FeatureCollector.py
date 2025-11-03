@@ -5,11 +5,9 @@ from mltools.feature_store.core import interface
 from mltools.feature_store.utils import utils
 from mltools.utils import utils as general_utils
 
-from typing import Literal
-
 class FeatureCollector:
-    def __init__(self, feature_store_connector: interface.DB_Connector, path_to_feature_logic: list[str]):
-        self.feature_store_connector = feature_store_connector
+    def __init__(self, feature_store_client: interface.FeatureStoreClient, path_to_feature_logic: list[str]):
+        self.feature_store_client = feature_store_client
         self.path_to_feature_logic = path_to_feature_logic
 
     # TODO: rename collect_recent_features - return only most recent features wrt reference time URGENCY: low, not needed until we use FC for fetching EVENTs (for trainer)
@@ -27,7 +25,7 @@ class FeatureCollector:
                          ) -> pd.DataFrame:
         # connect to the feature store
         try:
-            self.feature_store_connector.connect()
+            self.feature_store_client.connect()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to the feature store: {e}")
 
@@ -51,7 +49,7 @@ class FeatureCollector:
             # load last computed value of feature wrt to reference time
             # ignore stale values
             #TODO: rename reference_time to reference_times
-            loaded_feature = self.feature_store_connector.load_feature(feature_name=feature_metadata.name,module_name=feature_metadata.module_name)
+            loaded_feature = self.feature_store_client.load_feature(feature_name=feature_metadata.name,module_name=feature_metadata.module_name)
             historical_data, matched_flag, stale_flag = self.get_historical_data(all_values_df=loaded_feature,
                                                           entities=entities_to_collect,
                                                           reference_times=reference_times,
@@ -131,14 +129,14 @@ class FeatureCollector:
                                         ) -> pd.DataFrame:
         # connect to the feature store
         try:
-            self.feature_store_connector.connect()
+            self.feature_store_client.connect()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to the feature store: {e}")
 
         feature_metadata = utils.getFeatureMetaData(feature_name, self.path_to_feature_logic)
 
         # load feature values in the date range
-        loaded_feature = self.feature_store_connector.load_feature(
+        loaded_feature = self.feature_store_client.load_feature(
             feature_metadata.name,
             feature_metadata.module_name,
         )

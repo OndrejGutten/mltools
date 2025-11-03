@@ -283,7 +283,7 @@ class FeatureNameToDefinition:
 
 # TODO: introduce 'reference_time' string as argument?
 # TODO: does not work for events type features, as they expect ids and this function does not allow for it
-def DF_states_to_FS(df: pd.DataFrame, db_connector: interface.DB_Connector, path_to_feature_logic : str, reference_time_column: str, entity_column: str, calculation_time : datetime.datetime):
+def DF_states_to_FS(df: pd.DataFrame, client: interface.FeatureStoreClient, path_to_feature_logic : str, reference_time_column: str, entity_column: str, calculation_time : datetime.datetime):
     """
     Take a DataFrame with feature values + column with entity_ids + column with reference_times and update each as individual features to the feature store.
     Only features with FeatureType == STATE are supported (as each feature is contained within one column).
@@ -301,7 +301,7 @@ def DF_states_to_FS(df: pd.DataFrame, db_connector: interface.DB_Connector, path
     if not np.issubdtype(df[reference_time_column].dtype, np.datetime64):
         raise ValueError(f"Reference time column '{reference_time_column}' must be of datetime type. Got: {df[reference_time_column].dtype}")
     
-    db_connector.connect()
+    client.connect()
 
     value_columns = [col for col in df.columns if col not in [entity_column, reference_time_column]]
     
@@ -324,7 +324,7 @@ def DF_states_to_FS(df: pd.DataFrame, db_connector: interface.DB_Connector, path
         changed_or_new_rows = (~equal_values_mask & both_not_null_mask) | first_record_mask
         df_reduced = df_reduced[changed_or_new_rows]
 
-        db_connector.write_feature(
+        client.write_feature(
             feature_name = feature.name,
             module_name = feature.module_name,
             feature_df = df_reduced)

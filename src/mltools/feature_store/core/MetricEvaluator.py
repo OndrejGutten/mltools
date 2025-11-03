@@ -2,7 +2,7 @@ import mltools
 import yaml
 import os
 import pandas as pd
-from mltools.feature_store.core import DB_Connector, FeatureCollector
+from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
 import argparse
 
 class MetricEvaluator():
@@ -46,10 +46,10 @@ class MetricEvaluator():
         
         # Establish database connections
         feature_store_path = f"{feature_store_username}:{feature_store_password}@{feature_store_address}"
-        self.feature_store_connector = DB_Connector.PostgreSQL_DB_Connector(feature_store_path)
-        self.feature_store_connector.connect()
+        self.feature_store_client = FeatureStoreClient.FeatureStoreClient(feature_store_path)
+        self.feature_store_client.connect()
 
-        self.fc = FeatureCollector.FeatureCollector(feature_store_connector = self.feature_store_connector, path_to_feature_logic='')
+        self.fc = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic='')
 
         print("Setup verification completed successfully.")
 
@@ -64,7 +64,7 @@ class MetricEvaluator():
             # get ground truth
             ground_truth_address = model_config.get("ground_truth_address","")
             ground_truth_module, ground_truth_feature = mltools.feature_store.utils.address_to_module_and_feature_name(ground_truth_address)
-            ground_truth = self.feature_store_connector.load_feature(
+            ground_truth = self.feature_store_client.load_feature(
                                                         ground_truth_feature,
                                                         ground_truth_module,
                                                         timestamp_columns=['reference_time', 'calculation_time'])
@@ -74,7 +74,7 @@ class MetricEvaluator():
             # get predictions
             predictions_address = model_config.get("predictions_address", "")
             predictions_module, predictions_feature = mltools.feature_store.utils.address_to_module_and_feature_name(predictions_address)
-            predictions = self.feature_store_connector.load_feature(
+            predictions = self.feature_store_client.load_feature(
                                                         predictions_feature,
                                                         predictions_module,
                                                         timestamp_columns=['reference_time', 'calculation_time'])
@@ -119,7 +119,7 @@ class MetricEvaluator():
                     'calculation_time': pd.Timestamp.now(),
                 })
 
-                self.feature_store_connector.write_feature(
+                self.feature_store_client.write_feature(
                     feature_name=metric_definition.calculator_name,
                     module_name=metric_definition.module_name,
                     feature_df=kpi_measured,

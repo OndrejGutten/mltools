@@ -9,8 +9,8 @@ All classes derived from this class pick arguments listed in 'compute_args'. The
 - pohladavky_dlznikov: DataFrame containing the debts of the debtors.
 - solo_pohladavky_dlznikov: DataFrame containing the solo debts of the debtors (if applicable).
 - reference_times: Timestamps indicating the time of reference for the computation.
-- db_source_connector: Database connector for the source database.
-- db_target_connector: Database connector for the target database.
+- db_primary_engine: sqlalchemy.engine for the source database.
+- feature_store_client: Database connector (client) for the target database.
 - deriver: An instance of the Deriver class used for deriving specific values from the debts
 ###
 '''
@@ -25,8 +25,6 @@ class FeatureTemplate(interface.FeatureDefinition):
     prerequisite_features = []  # features this feature depends on from the target database - currently not used
     stale_after_n_days = None  # if set, the feature will be considered stale after this many days and recalculation will be triggered
     
-    # TODO: Calculating features from source/target prerequisite features is not yet implemented but could be part of the compute function, presuming that db_connectores are passed as kwargs
-
     def compute(self, **kwargs):
         # Check required arguments
         missing = [arg for arg in self.compute_args if arg not in kwargs]

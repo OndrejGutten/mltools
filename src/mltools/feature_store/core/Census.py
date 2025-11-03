@@ -4,7 +4,7 @@ from mltools.feature_store.core import interface
 
 
 def values_not_bound_to_events(
-        fs_connector: interface.DB_Connector,
+        fs_client: interface.FeatureStoreClient,
         features_addresses: list[str],
         event_feature_address: str,
         entity_id_column: str,
@@ -17,10 +17,10 @@ def values_not_bound_to_events(
     # return a dataframe with unbound values for each feature
     unbound_values = {}
     event_module_name, event_feature_name = utils.address_to_module_and_feature_name(event_feature_address)
-    events = fs_connector.load_feature(event_feature_name, event_module_name)
+    events = fs_client.load_feature(event_feature_name, event_module_name)
     for feature_address in features_addresses:
         module_name, feature_name = utils.address_to_module_and_feature_name(feature_address)
-        feature_values_df = fs_connector.load_feature(feature_name=feature_name, module_name=module_name)
+        feature_values_df = fs_client.load_feature(feature_name=feature_name, module_name=module_name)
         merged_df = feature_values_df.merge(
             events,
             how = 'left',

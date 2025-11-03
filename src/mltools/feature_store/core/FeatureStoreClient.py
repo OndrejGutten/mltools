@@ -1,24 +1,47 @@
-import sqlite3
+from importlib_metadata import metadata
 import pandas as pd
-import numpy as np
 import datetime
 import sqlalchemy
 
-from abc import abstractmethod
+from typing import Literal
+from sqlalchemy.orm import Session
 
 from mltools.utils.utils import sanitize_timestamps
 from mltools.feature_store.utils import schema_from_dataframe
 from mltools.utils.errors import FeatureAlreadyExistsError, FeatureNotFoundError, SchemaMismatchError
-from mltools.feature_store.core import interface
+
+from ..internal import FeatureStoreModel
 
 # TODO: sanitize_timestamps should be done at the top, avoid multiple calls
 
-class DB_Connector_Template(interface.DB_Connector):
-    # connect is responsible for creating sqlalchemy engine
+class FeatureStoreClient():
+    ENTITY_SET_SCHEMA = '_EntitySet'
+
     def __init__(self, db_path: str):
         self.db_path = db_path
-        # for SQLite timestamp_format is expected to be passed as a parameter
-    
+        # Map PostgreSQL types to pandas types
+        self.typedict_postgres_to_pandas = {
+            'integer': ['int64', 'bool'],
+            'bigint': ['int64', 'bool'],
+            'smallint': ['int64', 'bool'],
+            'real': ['float64', 'bool'],
+            'double precision': ['float64', 'bool'],
+            'float': ['float64', 'bool'],
+            'text': 'object',
+            'varchar': 'object',
+            'character varying': 'object',
+            'char': 'object',
+            'boolean': 'bool',
+            'bool': 'bool',
+            'numeric': 'float64',
+            'decimal': 'float64',
+            'date': ['datetime64[ns]', 'datetime64[us]'],
+            'timestamp': ['datetime64[ns]', 'datetime64[us]'],
+            'timestamp without time zone': ['datetime64[ns]', 'datetime64[us]'],
+            'timestamp with time zone': ['datetime64[ns]', 'datetime64[us]'],
+            'bytea': 'object'
+        }
+
     def load_feature(self, feature_name: str, module_name : str, timestamp_columns: list[str] = None):
         # translate feature_address to table we are looking for:
         DB_address = self._feature_and_module_name_to_DB_address(feature_name, module_name)
@@ -210,6 +233,100 @@ class DB_Connector_Template(interface.DB_Connector):
 
         return split_dfs
     '''
+
+    def register_entity_set(self, name : str, description : str, entity_id_name : str):
+        new_entity_set = FeatureStoreModel.EntitySet(name = name, description = description, entity_id_name = entity_id_name)
+        with Session(self.engine) as session:
+            existing = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            if not existing:
+                session.add(new_entity_set)
+                session.commit()
+            else:
+                print(f"Entity set '{name}' already exists. Skipping registration.")
+
+    def delete_entity_set(self, name : str):
+        with Session(self.engine) as session:
+            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            if entity_set:
+                session.delete(entity_set)
+                session.commit()
+
+    def retrieve_entity_set(self, name : str) -> FeatureStoreModel.EntitySetInfo:
+        with Session(self.engine) as session:
+            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            if entity_set:
+                members = [member.member_id for member in entity_set.members]
+                entity_set_info = FeatureStoreModel.EntitySetInfo(
+                    name = entity_set.name,
+                    description = entity_set.description,
+                    entity_id_name = entity_set.entity_id_name,
+                    members = members
+                )
+                return entity_set_info
+            else:
+                raise ValueError(f"Entity set with name '{name}' not found.")
+
+    def remove_members_from_entity_set(self, entity_set_name : str, member_ids : list[int] | Literal['all']):
+        with Session(self.engine) as session:
+            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=entity_set_name).first()
+            if not entity_set:
+                raise ValueError(f"Entity set with name '{entity_set_name}' not found.")
+        
+            if member_ids == 'all':
+                entity_set.members.clear()
+            else:
+                for member_id in member_ids:
+                    member = session.query(FeatureStoreModel.EntitySetMember).filter_by(member_id=member_id).first()
+                if member in entity_set.members:
+                    entity_set.members.remove(member)
+            session.commit()
+
+    def change_members_of_entity_set(self, entity_set_name : str, member_ids : list[int], mode : Literal['add','set']):
+        if mode not in ['add', 'set']:
+            raise ValueError("mode must be either 'add' or 'set'")
+        with Session(self.engine) as session:
+            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=entity_set_name).first()
+            if not entity_set:
+                raise ValueError(f"Entity set with name '{entity_set_name}' not found.")
+            if mode == 'set':
+                # Clear existing members
+                entity_set.members.clear()
+            # Add new members
+            for member_id in member_ids:
+                member = session.query(FeatureStoreModel.EntitySetMember).filter_by(member_id=member_id).first()
+                if member is None:
+                    member = FeatureStoreModel.EntitySetMember(member_id=member_id)
+                entity_set.members.append(member)
+            session.commit()
+
+    def assign_model_id(self, model_uri: str):
+        with Session(self.engine) as session:
+            model = session.query(FeatureStoreModel.ModelRegister).filter_by(model_uri=model_uri).first()
+            if not model:
+                print(f"Model with URI '{model_uri}' not found. Registering new model.")
+                model = FeatureStoreModel.ModelRegister(model_uri=model_uri)
+                session.add(model)
+                session.commit()
+            return model.id
+
+    def set_production_model(self, name: str, model_id: int):
+        with Session(self.engine) as session:
+            model_with_model_id = session.query(FeatureStoreModel.ModelRegister).filter_by(id=model_id).first()
+            if not model_with_model_id:
+                raise ValueError(f"Model with ID '{model_id}' not found.")
+
+            # Upsert ProductionModel with name=name and model_id=model_with_model_id.id
+            production_model = session.query(FeatureStoreModel.ProductionModel).filter_by(name=name).first()
+            if production_model:
+                production_model.model_id = model_with_model_id.id
+            else:
+                production_model = FeatureStoreModel.ProductionModel(name=name, model_id=model_with_model_id.id)
+                session.add(production_model)
+            session.commit()
+            log = FeatureStoreModel.ProductionHistory(model_name=name, model_id=model_with_model_id.id, promoted_at=datetime.datetime.now())
+            session.add(log)
+            session.commit()
+
     def _create_table_from_feature(self, DB_address : str, feature_df : pd.DataFrame):
         feature_df = sanitize_timestamps(feature_df)
         # given a dataframe, create a table in the DB
@@ -220,60 +337,6 @@ class DB_Connector_Template(interface.DB_Connector):
             print(f"{feature_df.shape[0]} records for feature '{DB_address}' written to database.")
         else:
             raise FeatureAlreadyExistsError(f"Feature '{DB_address}' already exists in the database.")
-
-    @abstractmethod
-    def _to_sql(self, df : pd.DataFrame, DB_address: str, engine : sqlalchemy.engine.base.Engine):
-        pass
-
-    @abstractmethod
-    def _check_if_object_exists(self, DB_address: str):
-        pass
-
-    @abstractmethod
-    def _get_feature_schema(self, DB_address: str):
-        pass
-
-    @abstractmethod
-    def _compare_schemas(self, DB_address : str, df_to_upload: pd.DataFrame):
-        pass
-
-    @abstractmethod
-    def query(self, sql_query: str):
-        pass
-    
-    @abstractmethod
-    def _feature_and_module_name_to_DB_address(self, feature_name : str, module_name : str) -> str:
-        pass
-
-    @abstractmethod
-    def connect(self):
-        pass
-
-class PostgreSQL_DB_Connector(DB_Connector_Template):
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        # Map PostgreSQL types to pandas types
-        self.typedict_postgres_to_pandas = {
-            'integer': ['int64', 'bool'],
-            'bigint': ['int64', 'bool'],
-            'smallint': ['int64', 'bool'],
-            'real': ['float64', 'bool'],
-            'double precision': ['float64', 'bool'],
-            'float': ['float64', 'bool'],
-            'text': 'object',
-            'varchar': 'object',
-            'character varying': 'object',
-            'char': 'object',
-            'boolean': 'bool',
-            'bool': 'bool',
-            'numeric': 'float64',
-            'decimal': 'float64',
-            'date': ['datetime64[ns]', 'datetime64[us]'],
-            'timestamp': ['datetime64[ns]', 'datetime64[us]'],
-            'timestamp without time zone': ['datetime64[ns]', 'datetime64[us]'],
-            'timestamp with time zone': ['datetime64[ns]', 'datetime64[us]'],
-            'bytea': 'object'
-        }
 
     def connect(self):
         """Establish a connection to the SQLite database."""
@@ -331,6 +394,19 @@ class PostgreSQL_DB_Connector(DB_Connector_Template):
             result = conn.execute(query, {"schema": schema, "table": table_name})
             schema = result.fetchall()
             return schema
+
+    def _create_all(self):
+        # TODO: Temporary method - once we change DB_connector to FS_client this should be called automatically
+        # Create all tables defined in the FeatureStoreModel
+        self.connect()
+        # Create schemas if they do not exist
+        schemas = {table.schema for table in FeatureStoreModel.Base.metadata.tables.values() if table.schema}
+        with self.engine.connect() as conn:
+            for schema in schemas:
+                conn.execute(sqlalchemy.text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+            conn.commit()
+        # Create tables if they do not exist
+        FeatureStoreModel.Base.metadata.create_all(self.engine)
 
     def _compare_schemas(self, DB_address: dict, df_to_upload: pd.DataFrame):
         # check if the incoming dataframe has non-zero length
@@ -398,6 +474,13 @@ class PostgreSQL_DB_Connector(DB_Connector_Template):
         with engine.begin() as conn:
             df.to_sql(table_name, conn, if_exists='append', index=False, dtype = cast_to_numeric_dict, **kwargs)
 
+    def _get_entity_set_member_table(self) -> str:
+        return f"{self.ENTITY_SET_SCHEMA}.Members"
+
+    def _get_entity_set_info_table(self) -> str:
+        return f"{self.ENTITY_SET_SCHEMA}.Register"
+
+'''
 class SQLite_DB_Connector(DB_Connector_Template):
     def __init__(self, db_path: str, timestamp_format: str = "%Y-%m-%d %H:%M:%S"):
         self.db_path = db_path
@@ -523,3 +606,5 @@ class SQLite_DB_Connector(DB_Connector_Template):
             raise ValueError(f"Invalid DB_address format: {DB_address}. Expected 'table_name' only (no dots).")
         
         df.to_sql(table_name, engine, if_exists='append', index=False, **kwargs)
+
+'''

@@ -1,19 +1,20 @@
 import datetime
 import numpy as np
+import sqlalchemy.engine
 from mltools.utils import errors, report, utils as general_utils
 from mltools.feature_store.utils import utils
 import mltools.feature_store.core.interface as interface
-from mltools.feature_store.core import FeatureCollector
+from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
 
 # TODO: remove path_to_db_pickle
 class FeatureAutomat(interface.FeatureAutomat):
     def __init__(self,
-                 primary_db_connector : interface.DB_Connector,
-                 feature_store_connector : interface.DB_Connector,
+                 primary_db_engine : sqlalchemy.engine.base.Engine,
+                 feature_store_client : FeatureStoreClient,
                  report_name: str,
                  ):
-        self.primary_db_connector = primary_db_connector
-        self.feature_store_connector = feature_store_connector
+        self.primary_db_engine = primary_db_engine
+        self.feature_store_client = feature_store_client
 
         self.compute_kwargs = {}
         self.feature_calculators = {}
@@ -21,8 +22,7 @@ class FeatureAutomat(interface.FeatureAutomat):
         self.report = report.Report(report_name)
 
         try:
-            self.primary_db_connector.connect()
-            self.feature_store_connector.connect()
+            self.feature_store_client.connect()
         except Exception as e:
             raise errors.DatabaseConnectionError(f"Failed to connect to databases: {e}")
         
@@ -59,7 +59,7 @@ class FeatureAutomat(interface.FeatureAutomat):
                 dlznik_ids = general_utils.to_array(entities_to_calculate, dtype = entities_to_calculate.dtype),
                 reference_times = reference_times_to_use,
                 prerequisite_features = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :],
-                feature_store_connector = self.feature_store_connector,
+                feature_store_client = self.feature_store_client,
                 **self.compute_kwargs,
             )
             self.report.add([feature_calculator.address, 'calculated_rows'], calculated_df.shape[0])
@@ -71,7 +71,7 @@ class FeatureAutomat(interface.FeatureAutomat):
                 feature_metadata = next(metadata for metadata in feature_calculator.features if metadata.name == feature_name)
                 if feature_metadata.type == interface.FeatureType.EVENT:
                     # write event feature to the target database
-                    written_data = self.feature_store_connector.write_feature(
+                    written_data = self.feature_store_client.write_feature(
                         feature_name=feature_name,
                         module_name=feature_calculator.module_name,
                         feature_df=df,
@@ -80,7 +80,7 @@ class FeatureAutomat(interface.FeatureAutomat):
                 elif feature_metadata.type == interface.FeatureType.STATE or feature_metadata.type == interface.FeatureType.TIMESTAMP:
                     # update state feature in the target database
                     # TODO: use write_feature for event features and update_feature for state_features
-                    written_data = self.feature_store_connector.update_feature(
+                    written_data = self.feature_store_client.update_feature(
                         feature_name=feature_name,
                         module_name=feature_calculator.module_name,
                         feature_df=df,
@@ -94,8 +94,7 @@ class FeatureAutomat(interface.FeatureAutomat):
 
     def _disconnect_from_databases(self):
         # disconnect from the databases
-        self.primary_db_connector.disconnect()
-        self.feature_store_connector.disconnect()
+        self.feature_store_client.disconnect()
 
     def _fetch_prerequisite_features(self, feature_calculator , requested_entities : list, reference_times: np.ndarray[datetime.datetime]):
         # fetch prerequisite features for the given feature - only target prerequisite features are currently supported
@@ -128,7 +127,7 @@ class FeatureAutomat(interface.FeatureAutomat):
 
         prerequisite_features = {}
 
-        fc = FeatureCollector.FeatureCollector(feature_store_connector=self.feature_store_connector, path_to_feature_logic=self.path_to_feature_logic)
+        fc = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic=self.path_to_feature_logic)
         collected_features, matched_flags, stale_flags = fc.collect_features(
             entities_to_collect=requested_entities,
             reference_times=general_utils.to_datetime_array(reference_times),
@@ -144,6 +143,5 @@ class FeatureAutomat(interface.FeatureAutomat):
         return collected_features, entities_to_ignore_due_to_missing_prerequisite | entities_to_ignore_due_to_stale_prerequisite
 
     def _connect_to_databases(self):
-        self.primary_db_connector.connect()
-        self.feature_store_connector.connect()
+        self.feature_store_client.connect()
 

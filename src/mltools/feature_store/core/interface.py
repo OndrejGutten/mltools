@@ -1,4 +1,3 @@
-# TODO: DB_Connector interface
 # TODO: FeatureCalculator interface
 # TODO: Reporter interface
 
@@ -94,8 +93,7 @@ class FeatureAutomat(ABC):
         pass
     """
 
-
-class DB_Connector(ABC):
+class FeatureStoreClient(ABC):
     @abstractmethod
     def connect():
         pass
@@ -124,3 +122,17 @@ class DB_Connector(ABC):
     def update_feature(self, feature_name: str, module_name: str, feature_df: pd.DataFrame, value_column : str, reference_time_column: str, groupby_key: str) -> pd.DataFrame:
         pass
 
+    @abstractmethod
+    def register_feature(self, feature_metadata: FeatureMetaData, feature_definition: FeatureDefinition):
+        '''Register a new feature in the feature store.'''
+        pass
+
+    @abstractmethod
+    def get_feature(self, feature_name: str) -> FeatureDefinition:
+        '''Retrieve a feature definition by its name.'''
+        pass
+
+    @abstractmethod
+    def calculate_features(self, reference_time: datetime.datetime):
+        '''Calculate features for all entities at the given reference time.'''
+        pass
