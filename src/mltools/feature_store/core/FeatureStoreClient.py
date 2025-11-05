@@ -15,10 +15,13 @@ from ..internal import FeatureStoreModel
 # TODO: sanitize_timestamps should be done at the top, avoid multiple calls
 
 class FeatureStoreClient():
-    ENTITY_SET_SCHEMA = '_EntitySet'
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
+    def __init__(self, db_flavor: str, username : str, password : str, address : str):
+        self.username = username
+        self.password = password
+        self.db_flavor = db_flavor.lower()
+        self.db_address = address
+        self.connection_string = f"{self.db_flavor}://{self.username}:{self.password}@{self.db_address}"
+        self.connection_string_printable = f"{self.db_flavor}://{self.username}:***@{self.db_address}"
         # Map PostgreSQL types to pandas types
         self.typedict_postgres_to_pandas = {
             'integer': ['int64', 'bool'],
@@ -235,9 +238,9 @@ class FeatureStoreClient():
     '''
 
     def register_entity_set(self, name : str, description : str, entity_id_name : str):
-        new_entity_set = FeatureStoreModel.EntitySet(name = name, description = description, entity_id_name = entity_id_name)
+        new_entity_set = FeatureStoreModel.EntitySetRegister(name = name, description = description, entity_id_name = entity_id_name)
         with Session(self.engine) as session:
-            existing = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            existing = session.query(FeatureStoreModel.EntitySetRegister).filter_by(name=name).first()
             if not existing:
                 session.add(new_entity_set)
                 session.commit()
@@ -246,14 +249,14 @@ class FeatureStoreClient():
 
     def delete_entity_set(self, name : str):
         with Session(self.engine) as session:
-            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            entity_set = session.query(FeatureStoreModel.EntitySetRegister).filter_by(name=name).first()
             if entity_set:
                 session.delete(entity_set)
                 session.commit()
 
     def retrieve_entity_set(self, name : str) -> FeatureStoreModel.EntitySetInfo:
         with Session(self.engine) as session:
-            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=name).first()
+            entity_set = session.query(FeatureStoreModel.EntitySetRegister).filter_by(name=name).first()
             if entity_set:
                 members = [member.member_id for member in entity_set.members]
                 entity_set_info = FeatureStoreModel.EntitySetInfo(
@@ -268,7 +271,7 @@ class FeatureStoreClient():
 
     def remove_members_from_entity_set(self, entity_set_name : str, member_ids : list[int] | Literal['all']):
         with Session(self.engine) as session:
-            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=entity_set_name).first()
+            entity_set = session.query(FeatureStoreModel.EntitySetRegister).filter_by(name=entity_set_name).first()
             if not entity_set:
                 raise ValueError(f"Entity set with name '{entity_set_name}' not found.")
         
@@ -285,7 +288,7 @@ class FeatureStoreClient():
         if mode not in ['add', 'set']:
             raise ValueError("mode must be either 'add' or 'set'")
         with Session(self.engine) as session:
-            entity_set = session.query(FeatureStoreModel.EntitySet).filter_by(name=entity_set_name).first()
+            entity_set = session.query(FeatureStoreModel.EntitySetRegister).filter_by(name=entity_set_name).first()
             if not entity_set:
                 raise ValueError(f"Entity set with name '{entity_set_name}' not found.")
             if mode == 'set':
@@ -341,9 +344,8 @@ class FeatureStoreClient():
     def connect(self):
         """Establish a connection to the SQLite database."""
         try:
-            # Assuming db_path in the form of username:password@host:port/dbname
             if not hasattr(self, 'engine'):
-                self.engine = sqlalchemy.create_engine(f'postgresql+psycopg2://{self.db_path}',
+                self.engine = sqlalchemy.create_engine(f'{self.connection_string}',
                                 pool_size=10,            # or 1 if you're not parallelizing
                                 max_overflow=0,         # don't allow going over pool_size
                                 pool_timeout=10,        # optional: wait 10s before failing
@@ -351,8 +353,14 @@ class FeatureStoreClient():
                             )
 
             with self.engine.connect() as conn:
-                self._create_all()
-            print(f"✅ Connected to database at {self.db_path}")
+                # Create schemas if they do not exist
+                schemas = {table.schema for table in FeatureStoreModel.Base.metadata.tables.values() if table.schema}
+                for schema in schemas:
+                    conn.execute(sqlalchemy.text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+                conn.commit()
+                # Create tables if they do not exist
+                FeatureStoreModel.Base.metadata.create_all(self.engine)
+            print(f"✅ Connected to database at {self.connection_string_printable}")
         except Exception as e:
             print(f"❌ Error connecting to database: {e}")
 
@@ -360,7 +368,7 @@ class FeatureStoreClient():
         """Disconnect from the database."""
         if hasattr(self, 'engine'):
             self.engine.dispose()
-            print(f"✅ Disconnected from database at {self.db_path}")
+            print(f"✅ Disconnected from database at {self.connection_string_printable}")
         else:
             print("❌ No active database connection to disconnect.")
 
@@ -394,19 +402,6 @@ class FeatureStoreClient():
             result = conn.execute(query, {"schema": schema, "table": table_name})
             schema = result.fetchall()
             return schema
-
-    def _create_all(self):
-        # TODO: Temporary method - once we change DB_connector to FS_client this should be called automatically
-        # Create all tables defined in the FeatureStoreModel
-        self.connect()
-        # Create schemas if they do not exist
-        schemas = {table.schema for table in FeatureStoreModel.Base.metadata.tables.values() if table.schema}
-        with self.engine.connect() as conn:
-            for schema in schemas:
-                conn.execute(sqlalchemy.text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
-            conn.commit()
-        # Create tables if they do not exist
-        FeatureStoreModel.Base.metadata.create_all(self.engine)
 
     def _compare_schemas(self, DB_address: dict, df_to_upload: pd.DataFrame):
         # check if the incoming dataframe has non-zero length
@@ -473,12 +468,6 @@ class FeatureStoreClient():
         cast_to_numeric_dict = {col: sqlalchemy.types.Numeric() for col in df.select_dtypes(include=['float64']).columns}
         with engine.begin() as conn:
             df.to_sql(table_name, conn, if_exists='append', index=False, dtype = cast_to_numeric_dict, **kwargs)
-
-    def _get_entity_set_member_table(self) -> str:
-        return f"{self.ENTITY_SET_SCHEMA}.Members"
-
-    def _get_entity_set_info_table(self) -> str:
-        return f"{self.ENTITY_SET_SCHEMA}.Register"
 
 '''
 class SQLite_DB_Connector(DB_Connector_Template):
