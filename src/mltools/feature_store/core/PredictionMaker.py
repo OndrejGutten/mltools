@@ -35,11 +35,10 @@ class PredictionMaker:
         feature_store_address = credentials.get("feature_store_address", None)
         if feature_store_username is None or feature_store_password is None or feature_store_address is None:
             raise ValueError("Both 'feature_store_username' and 'feature_store_password' and 'feature_store_address' must be provided in the credentials file.")
-        feature_store_connection_string = f"{feature_store_username}:{feature_store_password}@{feature_store_address}"
 
         # create DB connections
         # NOTE: hardcoded PostgreSQL for now
-        self.feature_store_client = FeatureStoreClient.FeatureStoreClient(feature_store_connection_string)
+        self.feature_store_client = FeatureStoreClient.FeatureStoreClient('postgresql+psycopg2',feature_store_username, feature_store_password, feature_store_address)
         self.feature_store_client.connect()
 
         # check yaml paths
