@@ -3,12 +3,14 @@ import yaml
 import os
 import pandas as pd
 from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
+from mltools.utils import report
 import argparse
 
 class MetricEvaluator():
-    def __init__(self, credentials_yaml_path: str, config_yaml_path: str):
+    def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str):
         self.credentials_yaml_path = credentials_yaml_path
         self.config_yaml_path = config_yaml_path
+        self.report = report.Report(report_name)
 
     def verify_setup(self):
         '''
@@ -104,6 +106,12 @@ class MetricEvaluator():
 
                 if len(y_true) == 0:
                     print(f"No valid predictions for model '{model_config.get('uri')}' in the date range {range_start} - {range_end}. Skipping calculation of {metric_definition.calculator_name}.")
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_observations'], number_of_valid_predictions)
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'date_start'], range_start)
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'date_end'], range_end)
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'kpi_value'], 'NaN')
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_stale_predictions'], number_of_stale_predictions)
+                    self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_missing_predictions'], number_of_missing_predictions)
                     continue
                 
                 kpi_value = metric_definition.compute(
@@ -126,6 +134,12 @@ class MetricEvaluator():
                 )
 
                 print(f"KPI '{metric_definition.calculator_name}' for model '{model_config.get('uri')}' in the date range {range_start} - {range_end} calculated using {number_of_valid_predictions} values. Number of stale predictions: {number_of_stale_predictions}, Number of missing predictions: {number_of_missing_predictions}. Value: {kpi_value}")
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_observations'], number_of_valid_predictions)
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'date_start'], range_start)
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'date_end'], range_end)
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'kpi_value'], kpi_value)
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_stale_predictions'], number_of_stale_predictions)
+                self.report.add([model_config.get("uri"), metric_definition.calculator_name,'number_of_missing_predictions'], number_of_missing_predictions)
 
     def report(self):
         pass

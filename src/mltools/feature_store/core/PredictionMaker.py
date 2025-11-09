@@ -1,17 +1,18 @@
 import datetime
 import yaml
 from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
-from mltools.utils import utils
+from mltools.utils import utils, report
 import os
 import mlflow
 import mltools
 import pandas as pd
 import numpy as np
-
+    
 class PredictionMaker:
-    def __init__(self, credentials_yaml_path: str, config_yaml_path: str):
+    def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str):
         self.credentials_yaml_path = credentials_yaml_path
         self.config_yaml_path = config_yaml_path
+        self.report = report.Report(report_name)
     
     def verify_setup(self):
         '''
@@ -77,6 +78,8 @@ class PredictionMaker:
         elif len(entities) != len(reference_times):
             raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
 
+        self.report.add("Number of entities", len(entities))
+
         # construct features list to collect (model to features directory mapping + union of all features)
         all_features = set()
         model_to_features = {}
@@ -89,8 +92,7 @@ class PredictionMaker:
         for model_entry in models_config:
             model_uri = model_entry.get("model_uri", None)
             prediction_address = model_entry.get("predicition_address", None)
-            model_to_prediction_address[model_uri] = prediction_address
-            #featureCollectionReport.add("model_uris", model_uri) 
+            model_to_prediction_address[model_uri] = prediction_address 
 
         # Make a set of features required by all models
         for model_uri in model_to_prediction_address.keys():
@@ -108,6 +110,8 @@ class PredictionMaker:
                 print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
                 #featureCollectionReport.add([model_uri,'feature_list_read'], False)
                 continue
+
+            self.report.add("model_uris", model_uri)
             
             all_features.update(model_feature_addresses)
             model_to_features[model_uri] = model_feature_addresses
@@ -141,6 +145,9 @@ class PredictionMaker:
             #featureCollectionReport.add([model_uri,'debtors_with_valid_data'], model_ok_inputs.shape[0])
             #featureCollectionReport.add([model_uri,'debtors_with_missing_data'], model_inputs.shape[0] - model_ok_inputs.shape[0])
             if model_ok_inputs.empty:
+                self.report.add([model_uri, "number_of_predictions"], 0)
+                self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
+                self.report.add([model_uri, "stale_values"], sum(stale_values))
                 print(f"No valid inputs available for model {model_uri} at reference time {reference_times}. Skipping prediction.")
                 continue
             # load model from mlflow
@@ -157,9 +164,6 @@ class PredictionMaker:
                 'calculation_time': datetime.datetime.now()
             })
             self.feature_store_client.update_feature(feature_name=feature_name, module_name=module_name, feature_df=predictions_df, value_column='prediction', groupby_key=entities_id_column)
-
-    def report(self, report_path: str):
-        pass
-        #featureCollectionReport.add("reference_time", reference_time)
-        #featureCollectionReport.save(f"./Intenzita_Volania/reports/{featureCollectionReport.name}.pkl")
-        #print(featureCollectionReport.data)
+            self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
+            self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
+            self.report.add([model_uri, "stale_values"], sum(stale_values))
