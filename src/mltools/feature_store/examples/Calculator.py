@@ -1,7 +1,7 @@
 import sys
 sys.path.insert(0, './src')
 
-from mltools.feature_store.core.FeatureStoreClient import FeatureStoreClient
+from mltools.feature_store.core.Client import FeatureStoreClient
 feature_store_password = "ondrejgutten"
 feature_store_username = "ondrejgutten"
 feature_store_address = "localhost:5432/pokus"
@@ -11,7 +11,7 @@ fsc = FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_sto
 fsc.connect()
 
 
-from mltools.feature_store.core import Metadata, FeatureCalculator
+from mltools.feature_store.core import Calculator, Metadata
 import pandas as pd
 import numpy as np
 import random
@@ -28,7 +28,7 @@ meta = Metadata.Metadata(
     version = 1
 )
 
-class TestFeatureCalculator(FeatureCalculator.FeatureCalculator):
+class TestFeatureCalculator(Calculator.FeatureCalculator):
     features = [meta]
     compute_args = ['dlznik_ids']
 
@@ -56,7 +56,7 @@ another_meta = Metadata.Metadata(
     version = 1
 )
 
-class AnotherTestFeatureCalculator(FeatureCalculator.FeatureCalculator):
+class AnotherTestFeatureCalculator(Calculator.FeatureCalculator):
     features = [another_meta]
     compute_args = ['dlznik_ids']
 
@@ -84,7 +84,7 @@ target_meta = Metadata.Metadata(
     version_description = "Initial version",
     version = 1
 )
-class TargetFeatureCalculator(FeatureCalculator.FeatureCalculator):
+class TargetFeatureCalculator(Calculator.FeatureCalculator):
     features = [target_meta]
     compute_args = ['dlznik_ids']
 
@@ -100,13 +100,13 @@ class TargetFeatureCalculator(FeatureCalculator.FeatureCalculator):
         return {target_meta : result_df}
 
 
-from mltools.feature_store.core import FeatureRegister
+from mltools.feature_store.core import Register
 
 print('registered features:')
-print(FeatureRegister._FEATURE_REGISTER)
+print(Register._FEATURE_REGISTER)
 
 print('registered feature calculators:')
-print(FeatureRegister._FEATURE_CALCULATOR_REGISTER)
+print(Register._FEATURE_CALCULATOR_REGISTER)
 
 result = TestFeatureCalculator()._compute(np.array([1,2,3,4,5]))
 

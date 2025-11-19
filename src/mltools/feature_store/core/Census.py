@@ -1,10 +1,10 @@
 import pandas as pd
 from mltools.feature_store.utils import utils
-from mltools.feature_store.core import FeatureStoreClient
+from mltools.feature_store.core import Client
 
 
 def values_not_bound_to_events(
-        fs_client: FeatureStoreClient.FeatureStoreClient,
+        fs_client: Client.FeatureStoreClient,
         features_addresses: list[str],
         event_feature_address: str,
         entity_id_column: str,

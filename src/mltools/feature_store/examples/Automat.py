@@ -4,13 +4,13 @@ sys.path.insert(0, './src')
 import numpy as np
 import datetime
 import yaml
-from mltools.feature_store.core import interface, FeatureAutomat, FeatureStoreClient
+from mltools.feature_store.core import Automat, Client, interface
 from mltools.utils import report
 
 from mltools.feature_store.examples import Calculator
 
-class TestAutomat(FeatureAutomat.FeatureAutomat):
-    def __init__(self, fsc : FeatureStoreClient.FeatureStoreClient):
+class TestAutomat(Automat.FeatureAutomat):
+    def __init__(self, fsc : Client.FeatureStoreClient):
         self.feature_store_client = fsc
         self.report = report.Report('TestAutomat Report')
         self.compute_kwargs = {}
@@ -35,7 +35,7 @@ credentials = yaml.safe_load(open('src/mltools/feature_store/examples/DB_credent
 feature_store_username = credentials['feature_store_username']
 feature_store_password = credentials['feature_store_password']
 feature_store_address = credentials['feature_store_address']
-fsc = FeatureStoreClient.FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_store_username, password=feature_store_password, address=feature_store_address)
+fsc = Client.FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_store_username, password=feature_store_password, address=feature_store_address)
 fsc.connect()
 
 automat = TestAutomat(fsc)

@@ -1,6 +1,6 @@
 import numpy as np
 
-from mltools.feature_store.core import FeatureRegister, Type
+from mltools.feature_store.core import Register, Type
 
 class Metadata:
     name: str
@@ -38,7 +38,7 @@ class Metadata:
         self.value_column = value_column
         self.reference_time_column = reference_time_column
 
-        FeatureRegister._FEATURE_REGISTER[self.name] = self
+        Register._FEATURE_REGISTER[self.name] = self
 
     def __hash__(self):
         return hash(self.name)

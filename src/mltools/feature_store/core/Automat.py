@@ -3,13 +3,13 @@ import numpy as np
 import sqlalchemy.engine
 from mltools.utils import errors, report, utils as general_utils
 from mltools.feature_store.utils import utils
-from mltools.feature_store.core import FeatureStoreClient, Type, interface
+from mltools.feature_store.core import Client, Type, interface
 
 # TODO: remove path_to_db_pickle
 class FeatureAutomat(interface.FeatureAutomat):
     def __init__(self,
                  primary_db_engine : sqlalchemy.engine.base.Engine,
-                 feature_store_client : FeatureStoreClient,
+                 feature_store_client : Client,
                  report_name: str,
                  ):
         self.primary_db_engine = primary_db_engine

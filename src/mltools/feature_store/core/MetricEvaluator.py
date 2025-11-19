@@ -2,7 +2,7 @@ import mltools
 import yaml
 import os
 import pandas as pd
-from mltools.feature_store.core import  FeatureStoreClient, FeatureRegister
+from mltools.feature_store.core import  Client, Register
 from mltools.utils import report
 import argparse
 
@@ -48,7 +48,7 @@ class MetricEvaluator():
         
         # Establish database connections
         feature_store_path = f"{feature_store_username}:{feature_store_password}@{feature_store_address}"
-        self.feature_store_client = FeatureStoreClient.FeatureStoreClient(feature_store_path)
+        self.feature_store_client = Client.FeatureStoreClient(feature_store_path)
         self.feature_store_client.connect()
 
         print("Setup verification completed successfully.")
@@ -98,7 +98,7 @@ class MetricEvaluator():
             number_of_valid_predictions = sum(valid_predictions_flag)
             
             for metric in model_config.get("metrics", []):
-                metric_definition = FeatureRegister._FEATURE_CALCULATOR_REGISTER.get(metric, None)
+                metric_definition = Register._FEATURE_CALCULATOR_REGISTER.get(metric, None)
                 if metric_definition is None:
                     print(f"Metric calculator '{metric}' not found for model '{model_config.get('uri')}'. Skipping this metric.")
                     continue

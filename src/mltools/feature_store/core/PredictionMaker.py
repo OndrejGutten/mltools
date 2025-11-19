@@ -1,6 +1,6 @@
 import datetime
 import yaml
-from mltools.feature_store.core import FeatureStoreClient
+from mltools.feature_store.core import Client
 from mltools.utils import utils, report
 import os
 import mlflow
@@ -39,7 +39,7 @@ class PredictionMaker:
 
         # create DB connections
         # NOTE: hardcoded PostgreSQL for now
-        self.feature_store_client = FeatureStoreClient.FeatureStoreClient('postgresql+psycopg2',feature_store_username, feature_store_password, feature_store_address)
+        self.feature_store_client = Client.FeatureStoreClient('postgresql+psycopg2',feature_store_username, feature_store_password, feature_store_address)
         self.feature_store_client.connect()
 
         # check yaml paths

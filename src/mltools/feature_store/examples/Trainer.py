@@ -3,7 +3,7 @@ sys.path.insert(0, './src')
 
 import datetime
 import yaml
-from mltools.feature_store.core import FeatureStoreClient
+from mltools.feature_store.core import Client
 
 
 model_features = ['test_feature', 'another_test_feature']
@@ -13,7 +13,7 @@ credentials = yaml.safe_load(open('src/mltools/feature_store/examples/DB_credent
 feature_store_username = credentials['feature_store_username']
 feature_store_password = credentials['feature_store_password']
 feature_store_address = credentials['feature_store_address']
-fsc = FeatureStoreClient.FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_store_username, password=feature_store_password, address=feature_store_address)
+fsc = Client.FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_store_username, password=feature_store_password, address=feature_store_address)
 fsc.connect()
 
 entity_ids = [1,2,3]

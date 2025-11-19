@@ -1,7 +1,7 @@
 from mltools.feature_store.utils import utils
 from abc import abstractmethod
 from mltools.feature_store.core import interface
-from mltools.feature_store.core import FeatureRegister
+from mltools.feature_store.core import Register
 
 '''
 ###
@@ -58,5 +58,5 @@ class FeatureCalculator(interface.FeatureCalculator):
             return [self.features.name]
 
     def __init_subclass__(cls):
-        FeatureRegister._FEATURE_CALCULATOR_REGISTER[cls.__name__] = cls
+        Register._FEATURE_CALCULATOR_REGISTER[cls.__name__] = cls
         return super().__init_subclass__()

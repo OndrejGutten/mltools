@@ -7,7 +7,7 @@ import sqlalchemy
 from typing import Literal
 from sqlalchemy.orm import Session
 
-from mltools.feature_store.core import Metadata, Type, FeatureRegister
+from mltools.feature_store.core import Metadata, Register, Type
 from mltools.utils import report, utils as general_utils
 from mltools.utils.errors import FeatureNotFoundError, SchemaMismatchError
 
@@ -360,7 +360,7 @@ class FeatureStoreClient():
         except Exception as e:
             raise ConnectionError(f"Failed to connect to the feature store: {e}")
 
-        feature_metadata = FeatureRegister._FEATURE_REGISTER.get(feature_name, None)
+        feature_metadata = Register._FEATURE_REGISTER.get(feature_name, None)
 
         if feature_metadata is None:
             raise ValueError(f"Feature metadata '{feature_name}' not found in the feature register.")
