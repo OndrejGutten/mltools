@@ -1,6 +1,7 @@
 from mltools.feature_store.utils import utils
 from abc import abstractmethod
 from mltools.feature_store.core import interface
+from mltools.feature_store.core import FeatureRegister
 
 '''
 ###
@@ -15,15 +16,11 @@ All classes derived from this class pick arguments listed in 'compute_args'. The
 ###
 '''
 
-# NO FEATURE SHOULD RETURN NAN/NONE/NULL VALUES!
-
 # FeatureTemplate is an ABSTRACT CLASS!
-class FeatureTemplate(interface.FeatureDefinition):
+class FeatureCalculator(interface.FeatureCalculator):
     # compute_args is a list of arguments that are expected by the compute method
     compute_args = []  # subclasses must define this list - these are the arguments passed to the _compute method by parent (FeatureTemplate) compute method
-    source_prerequisite_features = []  # features this feature depends on from the source database - will be used to check if any underlying data has changed
     prerequisite_features = []  # features this feature depends on from the target database - currently not used
-    stale_after_n_days = None  # if set, the feature will be considered stale after this many days and recalculation will be triggered
     
     def compute(self, **kwargs):
         # Check required arguments
@@ -59,4 +56,7 @@ class FeatureTemplate(interface.FeatureDefinition):
             if isinstance(self.features, list):
                 return [a.name for a in self.features]
             return [self.features.name]
-    
+
+    def __init_subclass__(cls):
+        FeatureRegister._FEATURE_CALCULATOR_REGISTER[cls.__name__] = cls
+        return super().__init_subclass__()

@@ -3,8 +3,7 @@ import numpy as np
 import sqlalchemy.engine
 from mltools.utils import errors, report, utils as general_utils
 from mltools.feature_store.utils import utils
-import mltools.feature_store.core.interface as interface
-from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
+from mltools.feature_store.core import FeatureStoreClient, Type, interface
 
 # TODO: remove path_to_db_pickle
 class FeatureAutomat(interface.FeatureAutomat):
@@ -28,6 +27,9 @@ class FeatureAutomat(interface.FeatureAutomat):
         
     def calculate_features(self, reference_times: np.ndarray[datetime.datetime], entities_to_calculate: np.ndarray):
 
+        entities_to_calculate = general_utils.to_array(entities_to_calculate)
+        reference_times = general_utils.to_datetime_array(reference_times)
+
         if len(entities_to_calculate) != len(reference_times):
             raise ValueError(f"Length of reference_times {len(reference_times)} must be either 1 (shall be used for all entities_to_calculate) or equal to length of entities_to_calculate {len(entities_to_calculate)} (shall be paired 1-to-1)")
         
@@ -40,8 +42,10 @@ class FeatureAutomat(interface.FeatureAutomat):
         # This function needs to be implemented in the subclass
         self.compute_universal_kwargs(entities_to_calculate=entities_to_calculate, reference_times=reference_times) # sets self.compute_kwargs with necessary data for feature calculation
 
+        all_features_dict = {}
         # compute features
         for feature_calculator in self.feature_calculators.values():
+            feature_calculator_name = type(feature_calculator).__name__
             # fetch prerequisite features
             # TODO: use feature_collector here instead of fetching prerequisite features manually
             prerequisite_features, mask_to_ignore_due_invalid_prerequisite = self._fetch_prerequisite_features(
@@ -51,46 +55,22 @@ class FeatureAutomat(interface.FeatureAutomat):
             # TODO: select rows that are not given in entities_to_ignore_due_to_missing_prerequisite and modify all arguments passed later acoordingly
             entities_to_calculate = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :].index.to_numpy()
             reference_times_to_use = reference_times[~mask_to_ignore_due_invalid_prerequisite]
-            self.report.add([feature_calculator.address, 'entities_to_calculate'], len(entities_to_calculate))
-            self.report.add([feature_calculator.address, 'entities_ignored_due_to_prerequisites'], sum(mask_to_ignore_due_invalid_prerequisite))
+            self.report.add([feature_calculator_name, 'entities_to_calculate'], len(entities_to_calculate))
+            self.report.add([feature_calculator_name, 'entities_ignored_due_to_prerequisites'], sum(mask_to_ignore_due_invalid_prerequisite))
 
             # compute the feature on entities that 1) need recalculation and 2) have all prerequisite features available
-            calculated_df = feature_calculator.compute(
+            calculated_features_dict = feature_calculator.compute(
                 dlznik_ids = general_utils.to_array(entities_to_calculate, dtype = entities_to_calculate.dtype),
                 reference_times = reference_times_to_use,
                 prerequisite_features = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :],
                 feature_store_client = self.feature_store_client,
                 **self.compute_kwargs,
             )
-            self.report.add([feature_calculator.address, 'calculated_rows'], calculated_df.shape[0])
 
-            # split the resulting DataFrame into multiple DataFrames if there is more than one feature in the DataFrame
-            # and write each DataFrame to the target database
-            single_feature_dfs = utils.split_multifeature(calculated_df, data_columns=feature_calculator.get_feature_names())
-            for df, feature_name in zip(single_feature_dfs, feature_calculator.get_feature_names()):
-                feature_metadata = next(metadata for metadata in feature_calculator.features if metadata.name == feature_name)
-                if feature_metadata.type == interface.FeatureType.EVENT:
-                    # write event feature to the target database
-                    written_data = self.feature_store_client.write_feature(
-                        feature_name=feature_name,
-                        module_name=feature_calculator.module_name,
-                        feature_df=df,
-                        unique_ID_column=feature_calculator.event_id_column
-                    )
-                elif feature_metadata.type == interface.FeatureType.STATE or feature_metadata.type == interface.FeatureType.TIMESTAMP:
-                    # update state feature in the target database
-                    # TODO: use write_feature for event features and update_feature for state_features
-                    written_data = self.feature_store_client.update_feature(
-                        feature_name=feature_name,
-                        module_name=feature_calculator.module_name,
-                        feature_df=df,
-                        value_column=feature_name,
-                        reference_time_column='reference_time',
-                        groupby_key=self.entity_id_column,
-                    )
-                self.report.add([feature_calculator.address, feature_name, 'written_rows'], written_data.shape[0])
-        
+            all_features_dict.update(calculated_features_dict)
+
         self._disconnect_from_databases()
+        return all_features_dict        
 
     def _disconnect_from_databases(self):
         # disconnect from the databases
@@ -127,14 +107,12 @@ class FeatureAutomat(interface.FeatureAutomat):
 
         prerequisite_features = {}
 
-        fc = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic=self.path_to_feature_logic)
-        collected_features, matched_flags, stale_flags = fc.collect_features(
+        collected_features, matched_flags, stale_flags = self.feature_store_client.collect_features(
             entities_to_collect=requested_entities,
             reference_times=general_utils.to_datetime_array(reference_times),
-            feature_metadata_address_list=feature_calculator.prerequisite_features,
-            id_column=self.entity_id_column,
-            reference_time_column='reference_time',
-            feature_staleness=self.feature_staleness)
+            features_to_collect=feature_calculator.prerequisite_features,
+            output_reference_time_column='reference_time',
+            )
         entities_to_ignore_due_to_missing_prerequisite = ~matched_flags.any(axis=1).to_numpy(bool) if not matched_flags.empty else np.full(len(requested_entities), False)
         entities_to_ignore_due_to_stale_prerequisite = stale_flags.any(axis=1).to_numpy(bool) if not stale_flags.empty else np.full(len(requested_entities), False)
         for feature_metadata_address in feature_calculator.prerequisite_features:

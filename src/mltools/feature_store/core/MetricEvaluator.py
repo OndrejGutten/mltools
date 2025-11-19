@@ -2,7 +2,7 @@ import mltools
 import yaml
 import os
 import pandas as pd
-from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
+from mltools.feature_store.core import  FeatureStoreClient, FeatureRegister
 from mltools.utils import report
 import argparse
 
@@ -51,8 +51,6 @@ class MetricEvaluator():
         self.feature_store_client = FeatureStoreClient.FeatureStoreClient(feature_store_path)
         self.feature_store_client.connect()
 
-        self.fc = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic='')
-
         print("Setup verification completed successfully.")
 
     def evaluate(self, range_start, range_end):
@@ -85,7 +83,7 @@ class MetricEvaluator():
 
             id_column = predictions.columns[0]
 
-            most_recent_predictions, matched_flag, stale_flag = self.fc.get_historical_data(
+            most_recent_predictions, matched_flag, stale_flag = self.feature_store_client.get_historical_data(
                 all_values_df=predictions,
                 entities=ground_truth.iloc[:, 0].to_numpy(),
                 reference_times=ground_truth['reference_time'].to_numpy(),
@@ -100,7 +98,10 @@ class MetricEvaluator():
             number_of_valid_predictions = sum(valid_predictions_flag)
             
             for metric in model_config.get("metrics", []):
-                metric_definition = mltools.feature_store.utils.getFeatureCalculator(metric, path_to_feature_logic=self.path_to_feature_logic)
+                metric_definition = FeatureRegister._FEATURE_CALCULATOR_REGISTER.get(metric, None)
+                if metric_definition is None:
+                    print(f"Metric calculator '{metric}' not found for model '{model_config.get('uri')}'. Skipping this metric.")
+                    continue
                 y_true = ground_truth.loc[valid_predictions_flag, ground_truth_feature].to_numpy()
                 y_score = most_recent_predictions[valid_predictions_flag]
 

@@ -13,70 +13,9 @@ import pandas as pd
 import numpy as np
 import unicodedata
 
-from mltools.feature_store.core import interface
+from mltools.feature_store.core import interface, Metadata
 from mltools.utils import errors
 from mltools.utils import utils as general_utils
-
-def address_to_module_and_feature_name(address: str):
-    parts = address.split('.')
-    if len(parts) != 2:
-        raise ValueError(f"Feature address must be in format 'module_name.feature_name'. Got: {address}")
-    module_name, feature_name = parts
-    return module_name, feature_name
-
-# TODO: make it clear this is a factory function (rename?)
-def getFeatureCalculator(feature_calculator_address : str, path_to_feature_logic: list[str]) -> interface.FeatureDefinition:
-    module_name, calculator_name = address_to_module_and_feature_name(feature_calculator_address)
-
-    if not isinstance(path_to_feature_logic, list):
-        path_to_feature_logic = [path_to_feature_logic]
-
-    feature_logic_dirs = [os.path.abspath(p) for p in path_to_feature_logic]
-    for feature_logic_dir in feature_logic_dirs:
-        if feature_logic_dir not in sys.path:
-            sys.path.insert(0, feature_logic_dir)
-
-    module_filename = f"{module_name}.py"
-    spec = importlib.util.spec_from_file_location(module_name, os.path.join(feature_logic_dir, module_filename))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    sys.modules[module_name] = module
-    if hasattr(module, calculator_name):
-            feature_calculator_class = getattr(module, calculator_name)
-            feature_calculator = feature_calculator_class()
-            feature_calculator.calculator_name = calculator_name
-            feature_calculator.module_name = module_name
-            feature_calculator.address = feature_calculator_address
-            return feature_calculator
-    else:
-        raise ImportError(f"'{calculator_name}' not found in module '{module_name}'.")
-
-def getFeatureMetaData(feature_address : str, path_to_feature_logic: list[str]) -> interface.FeatureMetaData:
-    module_name, feature_name  = address_to_module_and_feature_name(feature_address)
-
-    if not isinstance(path_to_feature_logic, list):
-        path_to_feature_logic = [path_to_feature_logic]
-
-    feature_logic_dirs = [os.path.abspath(p) for p in path_to_feature_logic]
-    for feature_logic_dir in feature_logic_dirs:
-        if feature_logic_dir not in sys.path:
-            sys.path.insert(0, feature_logic_dir)
-
-    module_filename = f"{module_name}.py"
-    spec = importlib.util.spec_from_file_location(module_name, os.path.join(feature_logic_dir, module_filename))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    sys.modules[module_name] = module
-    if not hasattr(module, "features"):
-        raise ImportError(f"Module '{module_name}' does not have 'features' defined.")
-    features = getattr(module, "features")
-    if feature_name not in features:
-        raise ImportError(f"Module '{module_name}' does not have feature '{feature_name}' defined in 'features'.")
-    return features[feature_name]
-
-def schema_from_dataframe(df: pd.DataFrame):
-    schema = {col: str(df[col].dtype) for col in df.columns}
-    return schema
 
 #TODO: staleness must be evaluated wrt multiple reference times
 def entities_with_invalid_attribute(latest_values_df, stale_after_n_days : int, id_column : str, reference_time = datetime.datetime.now(), reference_time_column = 'reference_time') -> set:
@@ -115,30 +54,7 @@ def find_differring_rows(original_df, updated_df, key_column = 'None'):
         return changed_rows[key_column].to_numpy()
     else:
         return changed_rows.index.to_numpy()
-    
-def split_multifeature(feature_df : pd.DataFrame, data_columns : list[str]):
-    #TODO: would be more consistent to use feature.attribute_names instead of data_columns argument
-    """
-    Splits a DataFrame with multiple features into separate DataFrames for each feature.
-    Assumes that the Dataframe has
-        - data columns - for each of these a separate DataFrame will be created
-        - 'non_data_columns' - these columns will be copied in all resulting DataFrames
-    """
-    # Identify data columns and non-data columns
-    if len (data_columns) == 0:
-        raise ValueError("No data columns found in the DataFrame. Are non_data_columns specified correctly?")
-    if not np.all(data_column in feature_df.columns for data_column in data_columns):
-        raise ValueError(f"Some data columns are not present in the DataFrame: {set(data_columns) - set(feature_df.columns)}")
-    if len (data_columns) == 1:
-        # If there is only one data column, return the original DataFrame
-        return [feature_df]
-    split_dfs = []
-    for data_column in data_columns:
-        other_data_columns = [col for col in data_columns if col != data_column]
-        split_df = feature_df.drop(columns=other_data_columns).copy()
-        split_dfs.append(split_df)
 
-    return split_dfs
 
 # TODO:
 def parallelize_call(func : Callable, kwargs : dict, num_processes = 8):
@@ -254,35 +170,10 @@ def try_parse(maybe_date : str):
         return pd.NaT
     
 
-class FeatureNameToDefinition:
-    def __init__(self, module_name : str, module_path : str):
-        self.module_name = module_name
-        if module_path not in sys.path:
-            sys.path.insert(0, module_path)
-
-        module_filename = f"{module_name}.py"
-        spec = importlib.util.spec_from_file_location(module_filename, os.path.join(module_path, module_filename))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        sys.modules[module_name] = module
-
-        self.attribute_to_definition = {}
-        for name, obj in inspect.getmembers(module, inspect.isclass):
-            fd = getattr(module, name)()
-            if not hasattr(fd, 'attribute_names'):
-                raise errors.FeatureDefinitionError(f"Feature definition class '{name}' does not have 'attribute_names' attribute.")
-            else:
-                for attribute in fd.attribute_names:
-                    self.attribute_to_definition[attribute] = fd
-
-    def get_feature_definition(self, feature_name : str) -> interface.FeatureDefinition:
-        if feature_name in self.attribute_to_definition:
-            return self.attribute_to_definition[feature_name]
-        else:
-            raise errors.FeatureDefinitionError(f"Feature definition for '{feature_name}' not found in module '{self.module_name}'.")
-
 # TODO: introduce 'reference_time' string as argument?
 # TODO: does not work for events type features, as they expect ids and this function does not allow for it
+# TODO: move to FeatureStoreClient
+'''
 def DF_states_to_FS(df: pd.DataFrame, client: interface.FeatureStoreClient, path_to_feature_logic : str, reference_time_column: str, entity_column: str, calculation_time : datetime.datetime):
     """
     Take a DataFrame with feature values + column with entity_ids + column with reference_times and update each as individual features to the feature store.
@@ -328,3 +219,4 @@ def DF_states_to_FS(df: pd.DataFrame, client: interface.FeatureStoreClient, path
             feature_name = feature.name,
             module_name = feature.module_name,
             feature_df = df_reduced)
+'''

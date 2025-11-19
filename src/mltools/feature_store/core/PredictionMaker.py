@@ -1,6 +1,6 @@
 import datetime
 import yaml
-from mltools.feature_store.core import FeatureCollector, FeatureStoreClient
+from mltools.feature_store.core import FeatureStoreClient
 from mltools.utils import utils, report
 import os
 import mlflow
@@ -117,11 +117,10 @@ class PredictionMaker:
             model_to_features[model_uri] = model_feature_addresses
 
         # collect features
-        feature_collector = FeatureCollector.FeatureCollector(feature_store_client=self.feature_store_client, path_to_feature_logic=self.path_to_feature_logic)
-        all_features_df, matched_df, stale_df = feature_collector.collect_features(
+        all_features_df, matched_df, stale_df = self.feature_store_client.collect_features(
             entities_to_collect=entities,
             reference_times=reference_times,
-            feature_metadata_address_list=list(all_features),
+            features_to_collect=list(all_features),
             id_column=entities_id_column,
             return_reference_time_column=True  # required by dates-to-timedeltas preprocessor
         )

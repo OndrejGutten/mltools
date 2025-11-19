@@ -11,3 +11,4 @@ setup_legacy.py
 notebooks/*
 test.py
 dist
+src/mltools/feature_store/examples/DB_credentials.yaml

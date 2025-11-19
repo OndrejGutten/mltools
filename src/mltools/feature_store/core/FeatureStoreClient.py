@@ -1,18 +1,20 @@
 from importlib_metadata import metadata
 import pandas as pd
+import numpy as np
 import datetime
 import sqlalchemy
 
 from typing import Literal
 from sqlalchemy.orm import Session
 
-from mltools.utils.utils import sanitize_timestamps
-from mltools.feature_store.utils import schema_from_dataframe
-from mltools.utils.errors import FeatureAlreadyExistsError, FeatureNotFoundError, SchemaMismatchError
+from mltools.feature_store.core import Metadata, Type, FeatureRegister
+from mltools.utils import report, utils as general_utils
+from mltools.utils.errors import FeatureNotFoundError, SchemaMismatchError
 
 from ..internal import FeatureStoreModel
+from sqlalchemy import MetaData, PrimaryKeyConstraint, Table, Column, Integer, Numeric, DateTime
 
-# TODO: sanitize_timestamps should be done at the top, avoid multiple calls
+# TODO: general_utils.sanitize_timestamps should be done at the top, avoid multiple calls
 
 class FeatureStoreClient():
     def __init__(self, db_flavor: str, username : str, password : str, address : str):
@@ -45,35 +47,44 @@ class FeatureStoreClient():
             'bytea': 'object'
         }
 
-    def load_feature(self, feature_name: str, module_name : str, timestamp_columns: list[str] = None):
-        # translate feature_address to table we are looking for:
-        DB_address = self._feature_and_module_name_to_DB_address(feature_name, module_name)
+    def load_feature_metadata(self, feature_name : str, version : int = None) -> Metadata.Metadata:
+        # load feature metadata from the feature registry table
+        # if version is None, load latest version
+        with Session(self.engine) as session:
+            existing = session.query(FeatureStoreModel.FeatureRegistry).filter_by(feature_name=feature_name).first()
+            if not existing:
+                raise FeatureNotFoundError(f"Feature '{feature_name}' not found in the feature registry.")
+            if version is not None:
+                version_metadata = next((v for v in existing.versions if v.version == version), None)
+                if not version_metadata:
+                    raise FeatureNotFoundError(f"Feature '{feature_name}' with version '{version}' not found in the feature registry.")
+            else:
+                version_metadata = existing.versions.created_at.desc().first()
 
-        # check if feature exists
-        if not self._check_if_object_exists(DB_address):
-            raise FeatureNotFoundError(f"Feature '{DB_address}' does not exist in the database.")
+            metadata = Metadata.Metadata(
+                name = existing.feature_name,
+                entity_id_name = existing.entity_id_name,
+                feature_type = Type.FeatureType(version_metadata.feature_type),
+                data_type = version_metadata.data_type,
+                stale_after_n_days = version_metadata.stale_after_n_days,
+                description = existing.description,
+                version_description = version_metadata.version_description,
+                version = version_metadata.version,
+                event_id_name = version_metadata.event_id_name,
+                value_column = version_metadata.value_column,
+                reference_time_column = version_metadata.reference_time_column,
+            )
+            return metadata
 
-        # attempt loading
-        # TODO: handle schema in DB_address
-        dot_split = DB_address.split('.')
-        kwargs = {}
-        if len(dot_split) == 2:
-            schema, table_name = dot_split
-            kwargs['schema'] = schema
-        elif len(dot_split) == 1:
-            table_name = dot_split[0]
-        else:
-            raise ValueError(f"Invalid DB_address format: {DB_address}. Expected 'schema.table_name' or 'table_name'.")
-        
+    def load_feature(self, feature_name: str, version: int = None):
+        metadata = self._check_if_feature_exists(feature_name, version)
+
         try:
-            if hasattr(self, 'timestamp_format') and self.timestamp_format is not None and timestamp_columns is not None:
-                kwargs['parse_dates'] = {col: self.timestamp_format for col in timestamp_columns}
-
             with self.engine.connect() as conn:
                 # Load the feature table into a DataFrame
-                feature_df = pd.read_sql_table(table_name, conn, **kwargs)
+                feature_df = pd.read_sql_table(metadata.table_name, conn, schema = FeatureStoreModel.SCHEMAS.FEATURES.value) # NOTE: DELETED parse_dates argument because this should be handled by pd.read_sql_table automatically when reading from postgres. Does it?
 
-            feature_df = sanitize_timestamps(feature_df)
+            feature_df = general_utils.sanitize_timestamps(feature_df)
             print(f"Feature '{feature_name}' loaded successfully.")
             return feature_df
         except Exception as e:
@@ -81,13 +92,14 @@ class FeatureStoreClient():
             return None
 
     # TODO: load_feature within date range (reference time/calculation time) / entity ID
-    def load_most_recent_feature_value_wrt_reference_time(self, feature_name: str, module_name: str, reference_time: pd.Timestamp = pd.Timestamp.now(),  groupby_key = 'dlznik_id', reference_time_column = 'reference_time'):
-        previously_computed_values_df = self.load_feature(feature_name = feature_name, module_name=module_name, timestamp_columns = ['calculation_time', 'reference_time'])
+    def load_most_recent_feature_value_wrt_reference_time(self, feature_name: str, reference_time: pd.Timestamp = pd.Timestamp.now(),  groupby_key = 'dlznik_id', reference_time_column = 'reference_time'):
+        previously_computed_values_df = self.load_feature(feature_name = feature_name)
         previously_computed_values_df = previously_computed_values_df[previously_computed_values_df[reference_time_column] <= reference_time]
         previously_computed_values_df.sort_values(by = reference_time_column, ascending=False, inplace=True)
         latest_values_df = previously_computed_values_df.groupby(groupby_key, as_index=False).head(1)
         return latest_values_df
 
+    '''
     def delete_data(self, feature_name: str, module_name: str, period_start : datetime.datetime, period_end : datetime.datetime, reference_column = 'reference_time'):
         # TODO: TEST
         # cleanup the feature table for a given period
@@ -114,81 +126,76 @@ class FeatureStoreClient():
             print(f"Cleanup for feature '{feature_name}' completed for period {period_start} to {period_end}. Deleted {count} records.")
         except Exception as e:
             print(f"Error during cleanup for feature '{feature_name}': {e}")
+    '''
 
-    def write_feature(self, feature_name: str, module_name : str, feature_df: pd.DataFrame, unique_ID_column: str = None):
-        feature_df = sanitize_timestamps(feature_df)
-        DB_address = self._feature_and_module_name_to_DB_address(feature_name, module_name)
-        # check if feature exists
-        if not self._check_if_object_exists(DB_address):
-            self._create_table_from_feature(DB_address=DB_address, feature_df=feature_df)
-            return feature_df
+    def submit_features(self, calculated_features_dict: dict):
+        current_report = report.Report(f'Feature_submission_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}')
+        written_data_list = []
+        for feature_metadata, df in calculated_features_dict.items():
+            # and write each DataFrame to the target database
+            current_report.add([feature_metadata.feature_name, 'submitted_rows'], calculated_features_dict.get(feature_metadata).shape[0])
+            if feature_metadata.feature_type == Type.FeatureType.EVENT:
+                written_data = self.write_feature(data = df, metadata = feature_metadata)
+                written_data_list.append(written_data)
+            elif feature_metadata.feature_type == Type.FeatureType.STATE or feature_metadata.feature_type == Type.FeatureType.TIMESTAMP:
+                written_data = self.update_feature(data = df, metadata = feature_metadata)
+                written_data_list.append(written_data)
+            current_report.add([feature_metadata.feature_name, 'written_rows'], written_data.shape[0])
+        return written_data_list, current_report
 
-        # check if feature schema matches the data
-        #self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
 
-        feature_df = sanitize_timestamps(feature_df)
+    def write_feature(self, data: pd.DataFrame, metadata: Metadata):
+        schema_name, table_name = self._validate_feature_metadata(metadata)
+        versioned_data = self._wrap_feature_data(data, metadata)
 
-        #if unique_ID_column is provided, check if the feature_df contains it + ensure only non-duplicate entries (as given by unique_ID_column) are written
-        if unique_ID_column:
-            if unique_ID_column not in feature_df.columns:
-                raise ValueError(f"unique_ID_column '{unique_ID_column}' is not present in the provided data.")
+        if metadata.event_id_name:
+            if metadata.event_id_name not in versioned_data.columns:
+                raise ValueError(f"unique_ID_column '{metadata.event_id_name}' is not present in the provided data.")
             try:
-                existing_entries_df = self.load_feature(
-                        feature_name = feature_name,
-                        module_name = module_name,
-                )
-                existing_entries = existing_entries_df[unique_ID_column].to_numpy()
+                existing_entries_df = self.load_feature(metadata.feature_name)
+                existing_entries = existing_entries_df[metadata.event_id_name].to_numpy()
             except FeatureNotFoundError:
-                print(f"Feature '{feature_name}' not found in the database. No existing entries to compare against. Writing all data.")
+                print(f"Feature '{metadata.feature_name}' not found in the database. No existing entries to compare against. Writing all data.")
             except Exception as e:
-                raise RuntimeError(f"Error loading existing entries for feature '{feature_name}': {e}")
+                raise RuntimeError(f"Error loading existing entries for feature '{metadata.feature_name}': {e}")
 
-            feature_df = feature_df[~feature_df[unique_ID_column].isin(existing_entries)]
-            print(f"Removing existing entries from the data to be written. {len(feature_df)} records remaining.")
+            data_to_write = versioned_data[~versioned_data[metadata.event_id_name].isin(existing_entries)]
+            print(f"Removing existing entries from the data to be written. {len(data_to_write)} records remaining.")
         else:
             print(f"No unique_ID_column provided. Writing all data to the database.")
+            data_to_write = versioned_data
 
-        # write the data
         try:
-            self._to_sql(feature_df, DB_address, self.engine)
-            print(f"{feature_df.shape[0]} records for feature '{feature_name}' written to database.")
-            return feature_df
+            self._to_sql(data = data_to_write,
+                         table_name = table_name,
+                         schema_name = schema_name)
+            print(f"{data.shape[0]} records for feature '{metadata.feature_name}' written to database.")
+            return data_to_write
         except Exception as e:
-            print(f"Error writing feature '{feature_name}' to database: {e}")
+            print(f"Error writing feature '{metadata.feature_name}' to database: {e}")    
 
-    def update_feature(self, feature_name: str, module_name: str, feature_df: pd.DataFrame, value_column : str, reference_time_column: str = 'reference_time',  groupby_key : str = 'dlznik_id'):
-        if feature_df.empty:
-            return feature_df
+    def update_feature(self, data : pd.DataFrame, metadata: Metadata):
+        if data.empty:
+            return data
 
         # TODO: already loaded features could be optionally passed to avoid loading them again
-        feature_df = sanitize_timestamps(feature_df)
-        feature_df.sort_values(by=reference_time_column, inplace=True)
+        data = general_utils.sanitize_timestamps(data)
+        data.sort_values(by=metadata.reference_time_column, inplace=True)
     
-        if not value_column in feature_df.columns:
+        if not metadata.value_column in data.columns:
             raise ValueError("value_column must refer to a column in the feature_df")
     
-        DB_address = self._feature_and_module_name_to_DB_address(feature_name, module_name)
-        #self._compare_schemas(DB_address = DB_address, df_to_upload=feature_df)
+        schema_name, table_name = self._validate_feature_metadata(metadata)
+        versioned_data = self._wrap_feature_data(data, metadata)
 
-        feature_df_schema = schema_from_dataframe(feature_df)
-        timestamp_columns = [key for key, value in feature_df_schema.items() if value in ['datetime64[ns]']] 
-        try:
-            all_values_df = self.load_feature(feature_name, module_name, timestamp_columns = timestamp_columns)
-            all_values_df.sort_values(by=reference_time_column, inplace=True)
-        except FeatureNotFoundError:
-            if feature_df.empty:
-                print(f"Feature '{feature_name}' not found in the database and no data provided to create it. Skipping update.")
-                return
-            
-            print(f"Feature '{feature_name}' not found in the database. Creating new feature with {feature_df.shape[0]} records.")
-            self._create_table_from_feature(DB_address=DB_address, feature_df=feature_df)
-            return feature_df
+        all_values_df = self.load_feature(metadata.feature_name)
+        all_values_df.sort_values(by=metadata.reference_time_column, inplace=True)
         
         feature_plus_latest_df = pd.merge_asof(
-                feature_df,
+                versioned_data,
                 all_values_df,
-                on=reference_time_column,
-                by= groupby_key,
+                on=metadata.reference_time_column,
+                by='entity_id',
                 direction='backward',
                 suffixes=('_new', '_current')
         )
@@ -198,44 +205,175 @@ class FeatureStoreClient():
         # if any value is null/NA the != operator returns True.
         # We actually want to write all these cases except when both values were calculated to be null.
         # This is equivalent to (both_values_null & old_value_calculated) because new_value_calculate is always True (otherwise it would not be part of the result in merge_asof)
-        equal_values = (feature_plus_latest_df[value_column + '_new'] == feature_plus_latest_df[value_column + '_current']).to_numpy()
+        equal_values = (feature_plus_latest_df[metadata.value_column + '_new'] == feature_plus_latest_df[metadata.value_column + '_current']).to_numpy()
         old_value_calculated = feature_plus_latest_df['calculation_time_current'].notna()
-        both_values_null = feature_plus_latest_df[value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[value_column + '_current'].isnull().to_numpy()
+        both_values_null = feature_plus_latest_df[metadata.value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[metadata.value_column + '_current'].isnull().to_numpy()
         update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
-        changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,groupby_key].to_numpy()
-        update_df = feature_df[feature_df[groupby_key].isin(changed_rows_entities)]
+        changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,'entity_id'].to_numpy()
+        update_df = data[data['entity_id'].isin(changed_rows_entities)]
         if len(changed_rows_entities) == 0:
-            print(f"No changes detected for feature '{feature_name}'. No data written.")
+            print(f"No changes detected for feature '{metadata.feature_name}'. No data written.")
             return update_df
         else:
-            self._to_sql(update_df, DB_address, self.engine)
-            print(f"Changes detected for feature '{feature_name}'. Writing {update_df.shape[0]} rows to database.")
+            self._to_sql(data=update_df, table_name=table_name, schema_name=schema_name)
+            print(f"Changes detected for feature '{metadata.feature_name}'. Writing {update_df.shape[0]} rows to database.")
             return update_df
-    '''
-    def _split_multifeature(feature_df : pd.DataFrame, data_columns : list[str]):
-        #TODO: would be more consistent to use feature.attribute_names instead of data_columns argument
-        """
-        Splits a DataFrame with multiple features into separate DataFrames for each feature.
-        Assumes that the Dataframe has
-            - data columns - for each of these a separate DataFrame will be created
-            - 'non_data_columns' - these columns will be copied in all resulting DataFrames
-        """
-        # Identify data columns and non-data columns
-        if len (data_columns) == 0:
-            raise ValueError("No data columns found in the DataFrame. Are non_data_columns specified correctly?")
-        if not np.all(data_column in feature_df.columns for data_column in data_columns):
-            raise ValueError(f"Some data columns are not present in the DataFrame: {set(data_columns) - set(feature_df.columns)}")
-        if len (data_columns) == 1:
-            # If there is only one data column, return the original DataFrame
-            return [feature_df]
-        split_dfs = []
-        for data_column in data_columns:
-            other_data_columns = [col for col in data_columns if col != data_column]
-            split_df = feature_df.drop(columns=other_data_columns).copy()
-            split_dfs.append(split_df)
 
-        return split_dfs
-    '''
+    def _check_if_feature_exists(self, feature_name: str, version : int = None):
+        # check if feature exists in the feature registry. If it does, return its metadata
+        with Session(self.engine) as session:
+            existing = session.query(FeatureStoreModel.FeatureRegistry).filter_by(feature_name=feature_name).first()
+            if not existing:
+                raise ValueError(f"Feature '{feature_name}' not found in the feature registry.")
+            if version is not None:
+                version_metadata = next((v for v in existing.versions if v.version == version), None)
+                if not version_metadata:
+                    raise ValueError(f"Feature '{feature_name}' version {version} not found in the feature registry.")
+            return existing
+
+    def collect_features(self,
+                         entities_to_collect : np.ndarray,
+                         reference_times : datetime.datetime | np.ndarray[datetime.datetime],
+                         features_to_collect : np.ndarray[str],
+                         output_reference_time_column : str = 'reference_time',
+                         return_reference_time_column: bool = False,
+                         ) -> pd.DataFrame:
+        # connect to the feature store
+
+        entities_to_collect = general_utils.to_array(entities_to_collect)
+        reference_times = general_utils.to_datetime_array(reference_times)
+        features_to_collect = general_utils.to_array(features_to_collect)
+
+        all_features_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
+        matched_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
+        stale_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
+
+        if len(features_to_collect) == 0:
+            return all_features_df, matched_df, stale_df
+
+        if len(reference_times) == 1:
+            reference_times = np.full(len(entities_to_collect), reference_times[0], dtype='datetime64[ns]')
+        elif len(entities_to_collect) != len(reference_times):
+            raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
+        
+        if output_reference_time_column in features_to_collect:
+            raise ValueError(f"The output_reference_time_column '{output_reference_time_column}' cannot be in features_to_collect. Rename it to avoid conflicts.")
+
+        # check that all features_to_collect are 1) registered 
+        try: 
+            metadata_list = [self._check_if_feature_exists(feature_name) for feature_name in features_to_collect]
+        except Exception as e:
+            raise ValueError(f"Failed to load feature metadata for features_to_collect: {e}")
+        
+        # check that all features share the same entity type
+        entity_id_names = set([metadata.entity_id_name for metadata in metadata_list])
+        if len(entity_id_names) > 1:
+            raise ValueError(f"All features to collect must share the same entity type. Found entity types: {entity_id_names}")
+        shared_entity_id_name = entity_id_names.pop()
+
+        feature_staleness_dict = {metadata.feature_name: metadata.stale_after_n_days for metadata in metadata_list}
+
+        for feature_metadata in metadata_list:
+            if feature_metadata is None:
+                raise ValueError(f"Feature metadata '{feature_metadata.feature_name}' not found in the feature register.")
+
+            loaded_feature = self.load_feature(feature_name=feature_metadata.feature_name)
+            historical_data, matched_flag, stale_flag = self.get_historical_data(all_values_df=loaded_feature,
+                                                          entities=entities_to_collect,
+                                                          reference_times=reference_times,
+                                                          reference_time_column=output_reference_time_column,
+                                                          expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None))
+
+            # assign to all_features_df
+            all_features_df[feature_metadata.feature_name] = historical_data
+            matched_df[feature_metadata.feature_name] = matched_flag
+            stale_df[feature_metadata.feature_name] = stale_flag
+
+        # return_reference_time_column?
+        if return_reference_time_column:
+            all_features_df[output_reference_time_column] = reference_times
+            
+        # return the collected features
+        return all_features_df, matched_df, stale_df
+
+    def get_historical_data(self, all_values_df: pd.DataFrame, entities: list, reference_times: list, reference_time_column: str, expiration_days: int = None) -> np.ndarray:
+        value_column = all_values_df.columns[1]  # assuming the first column is the value column
+        null_value = self.dtype_null_value(all_values_df.dtypes[value_column])
+        matched_flag_name = '__matched_flag' if '__matched_flag' not in all_values_df.columns else '___matched_flag'
+        all_values_df[matched_flag_name] = True
+        
+        original_order_index_name = '__original_order_index' if '__original_order_index' not in all_values_df.columns else '__old_index'
+        entity_df = pd.DataFrame({'entity_id': entities, reference_time_column: reference_times, original_order_index_name: list(range(len(entities)))})
+        
+        all_values_df = all_values_df.sort_values(by=[reference_time_column])
+        all_values_df[f'{reference_time_column}_feat'] = all_values_df[reference_time_column]
+
+        sorted_entity_df = entity_df.sort_values(by=[reference_time_column])
+
+        # Perform point-in-time join
+        merged = pd.merge_asof(
+            sorted_entity_df,
+            all_values_df,
+            by='entity_id',
+            on=reference_time_column,
+            direction="backward",
+            suffixes=("", "_feat"),
+        )
+
+        merged.sort_values(by=original_order_index_name, inplace=True)
+
+        matched_flag = merged[matched_flag_name].notnull().to_numpy().astype(bool)
+
+        if expiration_days is not None:
+            # Remove values that are too old
+            age = (merged[reference_time_column] - merged[f"{reference_time_column}_feat"]).dt.days.to_numpy()
+            stale_flag = (age > expiration_days).astype(bool)
+            merged.loc[:, value_column] = merged.loc[:, value_column].where(~stale_flag, other=null_value)
+        else:
+            stale_flag = np.full(merged.shape[0], False, dtype=bool)
+
+        if null_value is not None:
+            merged.loc[:, value_column] = merged.loc[:, value_column].fillna(null_value)
+        return merged[value_column].to_numpy(), matched_flag, stale_flag
+
+    def dtype_null_value(self, dtype):
+        if pd.api.types.is_integer_dtype(dtype):
+            return np.nan
+        elif pd.api.types.is_float_dtype(dtype):
+            return np.nan
+        elif pd.api.types.is_string_dtype(dtype):
+            return None
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            return pd.NaT
+        else:
+            return np.nan
+
+    def collect_events_in_date_range(self,
+                                        feature_name: str,
+                                        date_start: datetime.datetime,
+                                        date_end: datetime.datetime,
+                                        reference_time_column: str = 'reference_time'
+                                        ) -> pd.DataFrame:
+        # connect to the feature store
+        try:
+            self.feature_store_client.connect()
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect to the feature store: {e}")
+
+        feature_metadata = FeatureRegister._FEATURE_REGISTER.get(feature_name, None)
+
+        if feature_metadata is None:
+            raise ValueError(f"Feature metadata '{feature_name}' not found in the feature register.")
+
+        # load feature values in the date range
+        loaded_feature = self.load_feature(feature_metadata.feature_name)
+
+        loaded_feature = loaded_feature[
+            (loaded_feature[reference_time_column] >= date_start) &
+            (loaded_feature[reference_time_column] <= date_end)
+        ]
+
+        return loaded_feature
 
     def register_entity_set(self, name : str, description : str, entity_id_name : str):
         new_entity_set = FeatureStoreModel.EntitySetRegister(name = name, description = description, entity_id_name = entity_id_name)
@@ -330,17 +468,6 @@ class FeatureStoreClient():
             session.add(log)
             session.commit()
 
-    def _create_table_from_feature(self, DB_address : str, feature_df : pd.DataFrame):
-        feature_df = sanitize_timestamps(feature_df)
-        # given a dataframe, create a table in the DB
-        if not self._check_if_object_exists(DB_address):
-            feature_df = sanitize_timestamps(feature_df)
-            self._to_sql(feature_df, DB_address, self.engine)
-            print(f"Feature '{DB_address}' created in database.")
-            print(f"{feature_df.shape[0]} records for feature '{DB_address}' written to database.")
-        else:
-            raise FeatureAlreadyExistsError(f"Feature '{DB_address}' already exists in the database.")
-
     def connect(self):
         """Establish a connection to the SQLite database."""
         try:
@@ -352,14 +479,12 @@ class FeatureStoreClient():
                                 pool_recycle=1800       # optional: close idle connections after 30 min
                             )
 
-            with self.engine.connect() as conn:
+            with self.engine.begin() as conn:
                 # Create schemas if they do not exist
-                schemas = {table.schema for table in FeatureStoreModel.Base.metadata.tables.values() if table.schema}
-                for schema in schemas:
-                    conn.execute(sqlalchemy.text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
-                conn.commit()
+                for schema in FeatureStoreModel.SCHEMAS:
+                    conn.execute(sqlalchemy.text(f'CREATE SCHEMA IF NOT EXISTS "{schema.value}"'))
                 # Create tables if they do not exist
-                FeatureStoreModel.Base.metadata.create_all(self.engine)
+            FeatureStoreModel.Base.metadata.create_all(self.engine)
             print(f"✅ Connected to database at {self.connection_string_printable}")
         except Exception as e:
             print(f"❌ Error connecting to database: {e}")
@@ -372,11 +497,7 @@ class FeatureStoreClient():
         else:
             print("❌ No active database connection to disconnect.")
 
-    def _check_if_object_exists(self, DB_address: str):
-        
-        # Assume DB_address is a string in the format "schema.table_name"
-        schema, table = DB_address.split('.', 1)
-
+    def _check_if_object_exists(self, schema: str, table_name: str) -> bool:
         query = sqlalchemy.text("""
             SELECT EXISTS (
             SELECT 1
@@ -385,50 +506,9 @@ class FeatureStoreClient():
             )
         """)
         with self.engine.connect() as conn:
-            result = conn.execute(query, {"schema": schema, "table": table})
+            result = conn.execute(query, {"schema": schema, "table": table_name})
             return result.scalar()  # returns True or False
         
-    def _get_feature_schema(self, DB_address: dict):
-        # Query PostgreSQL for the schema of the feature (table)
-        schema, table_name = DB_address.split('.', 1)
-
-        query = sqlalchemy.text("""
-            SELECT column_name, data_type
-            FROM information_schema.columns
-            WHERE table_schema = :schema AND table_name = :table
-            ORDER BY ordinal_position
-        """)
-        with self.engine.connect() as conn:
-            result = conn.execute(query, {"schema": schema, "table": table_name})
-            schema = result.fetchall()
-            return schema
-
-    def _compare_schemas(self, DB_address: dict, df_to_upload: pd.DataFrame):
-        # check if the incoming dataframe has non-zero length
-        if df_to_upload.empty:
-            return
-        
-        # Check if table exists
-        if not self._check_if_object_exists(DB_address):
-            print(f"Table '{DB_address}' does not exist. No schema comparison needed.")
-            return
-
-        feature_db_schema = self._get_feature_schema(DB_address)
-        feature_df_schema = schema_from_dataframe(df_to_upload)
-
-        db_schema_dict = {col[0]: self.typedict_postgres_to_pandas.get(col[1].lower(), 'object') for col in feature_db_schema}
-        if db_schema_dict.keys() != feature_df_schema.keys():
-            raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
-
-        for key, val in feature_df_schema.items():
-            db_type = db_schema_dict.get(key)
-            if isinstance(db_type, list):
-                if val not in db_type:
-                    raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
-            else:
-                if val != db_type & df_to_upload[key].notna().any(): # allow mismatch if the column is completely NA
-                    raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}. Offending column: {key} with type {val} does not match expected type {db_type}.")
-
     def query(self, sql_query: str):
         # Query the PostgreSQL DB using SQLAlchemy engine
         try:
@@ -440,160 +520,118 @@ class FeatureStoreClient():
             print(f"Error querying database: {e}")
             return None
 
-    def _feature_and_module_name_to_DB_address(self, feature_name : str, module_name : str) -> str:
-        # convert feature and module name to table name
-        return f"{module_name}.{feature_name}"
-
-
-    def _to_sql(self, df : pd.DataFrame, DB_address: str, engine : sqlalchemy.engine.base.Engine):
-        dot_split = DB_address.split('.')
-        kwargs = {}
-        if len(dot_split) == 2:
-            schema, table_name = dot_split
-            kwargs['schema'] = schema
-            # Check if schema exists, if not - create it
-            with engine.begin() as conn:
-                schema_exists_query = sqlalchemy.text("""
-                    SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema
-                """)
-                result = conn.execute(schema_exists_query, {"schema": schema})
-                if not result.fetchone():
-                    conn.execute(sqlalchemy.text(f"CREATE SCHEMA IF NOT EXISTS \"{schema}\""))
-        elif len(dot_split) == 1:
-            table_name = dot_split[0]
-        else:
-            raise ValueError(f"Invalid DB_address format: {DB_address}. Expected 'schema.table_name' or 'table_name'.")
-        
+    def _to_sql(self, data : pd.DataFrame, table_name: str, schema_name : str = None):
+        data = general_utils.sanitize_timestamps(data)
         # cast float to numeric
-        cast_to_numeric_dict = {col: sqlalchemy.types.Numeric() for col in df.select_dtypes(include=['float64']).columns}
-        with engine.begin() as conn:
-            df.to_sql(table_name, conn, if_exists='append', index=False, dtype = cast_to_numeric_dict, **kwargs)
+        cast_to_numeric_dict = {col: sqlalchemy.types.Numeric() for col in data.select_dtypes(include=['float64']).columns}
+        with self.engine.begin() as conn:
+            data.to_sql(name = table_name,
+                        schema=schema_name,
+                        con=conn,
+                        if_exists='append',
+                        index=False,
+                        dtype = cast_to_numeric_dict,
+                        )
 
-'''
-class SQLite_DB_Connector(DB_Connector_Template):
-    def __init__(self, db_path: str, timestamp_format: str = "%Y-%m-%d %H:%M:%S"):
-        self.db_path = db_path
-        self.timestamp_format = timestamp_format
-        self.typedict_sqlite_to_pandas = {
-            'integer': ['int64','bool'],
-            'int': ['int64','bool'],
-            'bigint': ['int64', 'bool'],
-            'smallint': ['int64', 'bool'],
-        
-            'real': ['float64','bool'],
-            'double': ['float64','bool'],
-            'double precision': ['float64','bool'],
-            'float': ['float64','bool'],
+    def _validate_feature_metadata(self, feature_metadata: Metadata):
+        '''
+        Check if the given feature metadata match any registry entry.
+        If not, create a new registry entry + corresponding table and return the schema+table name.
+        If yes but any values do no match, raise SchemaMismatchError.
+        If yes and all values match, return the schema+table name.
+        '''
 
-            'text': 'object',
-            'varchar': 'object',
-            'char': 'object',
-            'nvarchar': 'object',
+        with Session(self.engine) as session:
+            existing = session.query(FeatureStoreModel.FeatureRegistry).filter_by(feature_name=feature_metadata.feature_name).first()
+            matching_version = [v for v in existing.versions if v.version == feature_metadata.version] if existing else None
+            if matching_version is not None and len(matching_version) > 1:
+                raise SchemaMismatchError(f"Multiple versions found for feature '{feature_metadata.feature_name}' version {feature_metadata.version}. Database integrity issue.")
 
-            'boolean': 'bool',
-            'bool': 'bool',
-
-            'numeric': 'float64',       
-            'decimal': 'float64',
-            'date': ['datetime64[ns]','datetime64[us]'],
-            'datetime': ['datetime64[ns]','datetime64[us]'],
-            'timestamp': ['datetime64[ns]','datetime64[us]'],
-
-            'blob': 'object'
-        }
-    def connect(self):
-        """Establish a connection to the SQLite database."""
-        try:
-            self.engine = sqlalchemy.create_engine(f'sqlite:///{self.db_path}')
-            # Test connection
-            with self.engine.connect() as conn:
-                pass
-            print(f"✅ Connected to database at {self.db_path}")
-        except sqlite3.Error as e:
-            print(f"❌ Error connecting to database: {e}")
-            
-    def _check_if_object_exists(self, DB_address: str):
-        # Check if feature exists in the DB using SQLAlchemy engine
-        query = sqlalchemy.text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=:table_name"
-        )
-        with self.engine.connect() as conn:
-            result = conn.execute(query, {"table_name": DB_address})
-            return result.fetchone() is not None
-
-    def _get_feature_schema(self, DB_address: str):
-        # Query the DB for the schema of the feature using SQLAlchemy engine
-        try:
-            query = sqlalchemy.text(f"PRAGMA table_info({DB_address})")
-            with self.engine.connect() as conn:
-                result = conn.execute(query)
-                schema = result.fetchall()
-                return schema
-        except Exception as e:
-            print(f"Error retrieving schema for {DB_address}: {e}")
-            return None
-        
-    def _compare_schemas(self, DB_address: str, df_to_upload: pd.DataFrame):
-        # Use SQLAlchemy engine to check if table exists
-        query_tables = sqlalchemy.text("SELECT name FROM sqlite_master WHERE type='table'")
-        with self.engine.connect() as conn:
-            table_list = conn.execute(query_tables).fetchall()
-            table_names = [table[0] for table in table_list]
-
-            if DB_address not in table_names:
-                print(f"Table '{DB_address}' does not exist. No schema comparison needed.")
-                return
-
-            # Check number of rows in table
-            query_count = sqlalchemy.text(f"SELECT COUNT(*) FROM {DB_address}")
-            num_rows = conn.execute(query_count).fetchone()[0]
-            if num_rows == 0:
-                print(f"Table '{DB_address}' is empty. No schema comparison needed.")
-                return
-
-        feature_db_schema = self._get_feature_schema(DB_address)
-        feature_df_schema = schema_from_dataframe(df_to_upload)
-
-        # compare the schema of the DB feature with the DataFrame schema
-        db_schema_dict = {col[1]: self.typedict_sqlite_to_pandas[col[2].lower()] for col in feature_db_schema}
-        if db_schema_dict.keys() != feature_df_schema.keys():
-            raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
-
-        for key, val in feature_df_schema.items():
-            db_type = db_schema_dict.get(key)
-            if isinstance(db_type, list):
-                if val not in db_type:
-                    raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
+            if existing and matching_version:
+                mismatched_values = {}
+                for attr in ['entity_id_name', 'data_type', 'stale_after_n_days']:
+                    if getattr(existing, attr) != getattr(feature_metadata, attr):
+                        mismatched_values[attr] = (getattr(existing, attr), getattr(feature_metadata, attr))
+                if getattr(existing, 'feature_type') != feature_metadata.feature_type.value:
+                    mismatched_values['feature_type'] = (getattr(existing, 'feature_type'), feature_metadata.feature_type.value)
+                for attr in ['description', 'version_description']:
+                    if getattr(matching_version[0], attr) != getattr(feature_metadata, attr):
+                        mismatched_values[attr] = (getattr(matching_version[0], attr), getattr(feature_metadata, attr))
+                if mismatched_values:
+                        raise SchemaMismatchError(f"Metadata mismatch for feature '{feature_metadata.feature_name}' version {feature_metadata.version}. Offending entries: {mismatched_values}")
+                return 'features', existing.table_name
             else:
-                if val != db_type:
-                    raise SchemaMismatchError(f"Schema mismatch for feature '{DB_address}'. Expected {feature_db_schema}, got {feature_df_schema}.")
+                if not existing:
+                    # assign new table name
+                    table_name = self._create_table(feature_metadata)
+                    # create new feature entry
+                    new_feature = FeatureStoreModel.FeatureRegistry(
+                        table_name = table_name,
+                        feature_name = feature_metadata.feature_name,
+                        entity_id_name = feature_metadata.entity_id_name,
+                        feature_type = feature_metadata.feature_type.value,
+                        data_type = feature_metadata.data_type,
+                        stale_after_n_days = feature_metadata.stale_after_n_days
+                    )
+                    session.add(new_feature)
+                    session.commit()
+                    existing = new_feature
 
-    def query(self, sql_query: str):
-        # query the DB with a custom SQL query using SQLAlchemy engine
-        try:
-            with self.engine.connect() as conn:
-                result = conn.execute(sqlalchemy.text(sql_query))
-                rows = result.fetchall()
-            return rows
-        except Exception as e:
-            print(f"Error querying database: {e}")
-            return None
+                if not matching_version:
+                    # create new version log
+                    new_version_log = FeatureStoreModel.FeatureLog(
+                        feature_id = existing.id,
+                        version = feature_metadata.version,
+                        created_at = datetime.datetime.now(),
+                        description = feature_metadata.description,
+                    version_description = feature_metadata.version_description
+                    )
+                    session.add(new_version_log)
+                    session.commit()
 
-    def _feature_and_module_name_to_DB_address(self, feature_name : str, module_name : str) -> str:
-        # convert feature and module name to table name
-        return f"{module_name}__{feature_name}"
+                return 'features', table_name
 
 
-    def _to_sql(self, df : pd.DataFrame, DB_address: str, engine : sqlalchemy.engine.base.Engine):
-        dot_split = DB_address.split('.')
-        kwargs = {}
-        if len(dot_split) == 2:
-            raise ValueError(f"SQLite does not support schemas. Expected 'table_name' only (no dots).")
-        elif len(dot_split) == 1:
-            table_name = dot_split[0]
+    def _wrap_feature_data(self, data : pd.DataFrame, metadata : Metadata ): # version number should be FK
+        data['version'] = metadata.version
+        return data
+
+    def _create_table(self, feature_metadata: Metadata.Metadata) -> str:
+        schema_name = 'features'
+        candidate_name = f"{feature_metadata.feature_name.lower()}"
+
+        if self._check_if_object_exists(schema = FeatureStoreModel.SCHEMAS.FEATURES.value, table_name = candidate_name):
+            return candidate_name
         else:
-            raise ValueError(f"Invalid DB_address format: {DB_address}. Expected 'table_name' only (no dots).")
-        
-        df.to_sql(table_name, engine, if_exists='append', index=False, **kwargs)
-
-'''
+            if feature_metadata.feature_type == Type.FeatureType.STATE:
+                # Create table with name candidate_name and columns from feature_metadata
+                metadata_obj = MetaData(schema=schema_name)
+                table = Table(
+                    candidate_name,
+                    metadata_obj,
+                    Column("entity_id", Integer),
+                    Column(feature_metadata.value_column, Numeric),
+                    Column(feature_metadata.reference_time_column, DateTime),
+                    Column('calculation_time', DateTime),
+                    Column('version', Integer),
+                    PrimaryKeyConstraint('entity_id', feature_metadata.reference_time_column, name=f'pk_{candidate_name}')
+                )
+                metadata_obj.create_all(self.engine)
+                return candidate_name
+            elif metadata.feature_type == Type.FeatureType.EVENT:
+                # Create table with name candidate_name and columns from feature_metadata
+                metadata_obj = MetaData(schema=schema_name)
+                table = Table(
+                    candidate_name,
+                    metadata_obj,
+                    Column("event_id", Integer, primary_key=True),
+                    Column("entity_id", Integer),
+                    Column(feature_metadata.value_column, Numeric),
+                    Column(feature_metadata.reference_time_column, DateTime),
+                    Column('calculation_time', DateTime),
+                    Column('version', Integer),
+                )
+                metadata_obj.create_all(self.engine)
+                return candidate_name
+            else:
+                raise ValueError(f"Creating feature tables for {feature_metadata.feature_name} of type {feature_metadata.feature_type} is not implemented yet.")
