@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import DateTime, Column, Integer, String, ForeignKey
+from sqlalchemy import DateTime, Column, Integer, String, Numeric, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -60,7 +60,7 @@ class ProductionModel(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
-    model_id = Column(Integer, ForeignKey(ModelRegister.id), nullable=False)
+    model_id = Column(Integer, ForeignKey(ModelRegister.id, ondelete='CASCADE'), nullable=False)
 
     model = relationship("ModelRegister")
 
@@ -70,7 +70,7 @@ class ProductionHistory(Base):
 
     id = Column(Integer, primary_key=True)
     model_name = Column(String, nullable=False)
-    model_id = Column(Integer, ForeignKey(ModelRegister.id), nullable=False)
+    model_id = Column(Integer, ForeignKey(ModelRegister.id, ondelete='CASCADE'), nullable=False)
     promoted_at = Column(DateTime, nullable=False)
 
     model = relationship("ModelRegister")
@@ -89,6 +89,7 @@ class FeatureRegistry(Base):
     feature_type = Column(String, nullable=False) # STATES vs EVENTS
     data_type = Column(String, nullable=False) # int/bool/string/etc.
     stale_after_n_days = Column(Integer, nullable=True)  # if None, never stale
+    metadata_type = Column(String, nullable=False) # FEATURE vs PREDICTION vs METRIC
 
     versions = relationship("FeatureLog",back_populates="feature",cascade="delete")
 
@@ -97,10 +98,22 @@ class FeatureLog(Base):
     __table_args__ = {"schema": SCHEMAS.METADATA.value}
 
     id = Column(Integer, primary_key=True)
-    feature_id = Column(Integer, ForeignKey(FeatureRegistry.id), nullable=False)
+    feature_id = Column(Integer, ForeignKey(FeatureRegistry.id, ondelete='CASCADE'), nullable=False)
     version = Column(Integer, nullable=False)  # version of the feature
     created_at = Column(DateTime, nullable=False)
     description = Column(String, nullable=False) # description of a feature; changing this text in FeatureMetadata object triggers new version
     version_description = Column(String, nullable=True) # description of this version change; changing this text in FeatureMetadata object triggers new version
 
     feature = relationship("FeatureRegistry", back_populates="versions")
+
+class DlznikFloat(Base):
+    __tablename__ = "dlznik_float"
+    __table_args__ = {"schema": SCHEMAS.PREDICTIONS.value}
+
+    entity_id = Column(Numeric, nullable=False, primary_key=True)  # ID of the entity for which the prediction is made
+    prediction = Column(Numeric, nullable=False)  # prediction value
+    model_id = Column(Integer, ForeignKey(ModelRegister.id), nullable=False, primary_key=True)  # model used for the prediction
+    reference_time = Column(DateTime, nullable=False, primary_key=True)  # the prediction is valid for this time
+    calculation_time = Column(DateTime, nullable=False)  # timestamp when the prediction was calculated
+
+    model = relationship("ModelRegister")

@@ -19,3 +19,7 @@ class FeatureType(enum.Enum):
     # This type means the value will be a timestamp and should trigger calculation of a timediff (between the timestamp and the reference time) upon retrieval.
     TIMESTAMP = "TIMESTAMP"
 
+class MetadataType(enum.Enum):
+    FEATURE = "FEATURE"
+    PREDICTION = "PREDICTION"
+    METRIC = "METRIC"

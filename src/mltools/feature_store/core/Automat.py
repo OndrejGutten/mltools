@@ -31,8 +31,8 @@ class FeatureAutomat(interface.FeatureAutomat):
         reference_times = general_utils.to_datetime_array(reference_times)
 
         if len(entities_to_calculate) != len(reference_times):
-            raise ValueError(f"Length of reference_times {len(reference_times)} must be either 1 (shall be used for all entities_to_calculate) or equal to length of entities_to_calculate {len(entities_to_calculate)} (shall be paired 1-to-1)")
-        
+            raise ValueError(f"Length of reference_times (={len(reference_times)}) must be equal to the length of entities_to_calculate (={len(entities_to_calculate)}) (shall be paired 1-to-1)")
+
         # trigger calculation of features
         self._connect_to_databases()
 
@@ -53,15 +53,15 @@ class FeatureAutomat(interface.FeatureAutomat):
                 requested_entities= entities_to_calculate,
                 reference_times = reference_times)
             # TODO: select rows that are not given in entities_to_ignore_due_to_missing_prerequisite and modify all arguments passed later acoordingly
-            entities_to_calculate = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :].index.to_numpy()
-            reference_times_to_use = reference_times[~mask_to_ignore_due_invalid_prerequisite]
-            self.report.add([feature_calculator_name, 'entities_to_calculate'], len(entities_to_calculate))
+            entities_with_preqrequisites = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :].index.to_numpy()
+            reference_times_with_prerequisites = reference_times[~mask_to_ignore_due_invalid_prerequisite]
+            self.report.add([feature_calculator_name, 'entities_to_calculate'], len(entities_with_preqrequisites))
             self.report.add([feature_calculator_name, 'entities_ignored_due_to_prerequisites'], sum(mask_to_ignore_due_invalid_prerequisite))
 
             # compute the feature on entities that 1) need recalculation and 2) have all prerequisite features available
             calculated_features_dict = feature_calculator.compute(
-                dlznik_ids = general_utils.to_array(entities_to_calculate, dtype = entities_to_calculate.dtype),
-                reference_times = reference_times_to_use,
+                dlznik_ids = general_utils.to_array(entities_with_preqrequisites, dtype = entities_with_preqrequisites.dtype),
+                reference_times = reference_times_with_prerequisites,
                 prerequisite_features = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :],
                 feature_store_client = self.feature_store_client,
                 **self.compute_kwargs,

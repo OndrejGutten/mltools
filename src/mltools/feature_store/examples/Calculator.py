@@ -11,17 +11,17 @@ fsc = FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_sto
 fsc.connect()
 
 
-from mltools.feature_store.core import Calculator, Metadata
+from mltools.feature_store.core import Calculator, Metadata, Type
 import pandas as pd
 import numpy as np
 import random
 
 # ========================
 meta = Metadata.Metadata(
-    name = "test_feature",
+    feature_name = "test_feature",
     entity_id_name = "dlznik_id",
-    feature_type = Metadata.Type.FeatureType.STATE,
-    data_type = 'float64',
+    feature_type = Type.FeatureType.STATE,
+    data_type = 'float',
     stale_after_n_days = 30,
     description = "This is a test feature",
     version_description = "Initial version",
@@ -46,10 +46,10 @@ class TestFeatureCalculator(Calculator.FeatureCalculator):
 # ========================
 
 another_meta = Metadata.Metadata(
-    name = "another_test_feature",
+    feature_name = "another_test_feature",
     entity_id_name = "dlznik_id",
-    feature_type = Metadata.Type.FeatureType.STATE,
-    data_type = 'float64',
+    feature_type = Type.FeatureType.STATE,
+    data_type = 'float',
     stale_after_n_days = 30,
     description = "This is a test feature",
     version_description = "Initial version",
@@ -75,10 +75,10 @@ class AnotherTestFeatureCalculator(Calculator.FeatureCalculator):
 
 # ========================
 target_meta = Metadata.Metadata(
-    name = "target_feature",
+    feature_name = "target_feature",
     entity_id_name = "dlznik_id",
-    feature_type = Metadata.Type.FeatureType.STATE,
-    data_type = 'float64',
+    feature_type = Type.FeatureType.STATE,
+    data_type = 'float',
     stale_after_n_days = 30,
     description = "This is a test feature",
     version_description = "Initial version",

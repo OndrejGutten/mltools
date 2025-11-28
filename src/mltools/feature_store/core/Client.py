@@ -1,4 +1,5 @@
 from importlib_metadata import metadata
+import decimal
 import pandas as pd
 import numpy as np
 import datetime
@@ -12,7 +13,7 @@ from mltools.utils import report, utils as general_utils
 from mltools.utils.errors import FeatureNotFoundError, SchemaMismatchError
 
 from ..internal import FeatureStoreModel
-from sqlalchemy import MetaData, PrimaryKeyConstraint, Table, Column, Integer, Numeric, DateTime
+from sqlalchemy import Boolean, Float, MetaData, PrimaryKeyConstraint, String, Table, Column, Integer, Numeric, DateTime
 
 # TODO: general_utils.sanitize_timestamps should be done at the top, avoid multiple calls
 
@@ -79,10 +80,16 @@ class FeatureStoreClient():
     def load_feature(self, feature_name: str, version: int = None):
         metadata = self._check_if_feature_exists(feature_name, version)
 
+        table_name = metadata.table_name
+        schema_name = self._metadata_type_to_schema(metadata.metadata_type)
+
         try:
             with self.engine.connect() as conn:
                 # Load the feature table into a DataFrame
-                feature_df = pd.read_sql_table(metadata.table_name, conn, schema = FeatureStoreModel.SCHEMAS.FEATURES.value) # NOTE: DELETED parse_dates argument because this should be handled by pd.read_sql_table automatically when reading from postgres. Does it?
+                feature_df = pd.read_sql_table(table_name, conn, schema=schema_name) # NOTE: DELETED parse_dates argument because this should be handled by pd.read_sql_table automatically when reading from postgres. Does it?
+
+                if feature_df.empty:
+                    feature_df = self._read_empty_table_with_dtypes(self.engine, metadata.table_name, schema=schema_name)
 
             feature_df = general_utils.sanitize_timestamps(feature_df)
             print(f"Feature '{feature_name}' loaded successfully.")
@@ -90,6 +97,43 @@ class FeatureStoreClient():
         except Exception as e:
             print(f"Error loading feature '{feature_name}': {e}")
             return None
+
+    def _read_empty_table_with_dtypes(self, engine, table_name, schema=None):
+        metadata = MetaData()
+        table = Table(table_name, metadata, schema=schema, autoload_with=engine)
+
+        # Step 1: load empty frame with correct columns
+        df = pd.read_sql(table.select().limit(0), engine)
+
+        # Step 2: construct dtype map from SQLAlchemy column definitions
+        dtype_map = {}
+
+        for col in table.columns:
+            try:
+                py = col.type.python_type   # <— This is the actual correct python type
+            except NotImplementedError:
+                # Some types (e.g. JSON, ARRAY) may not have python_type
+                continue
+
+            name = col.name
+            if py is int:
+                dtype_map[name] = "int"     # pandas nullable int
+            elif py is decimal.Decimal:
+                dtype_map[name] = "float"
+            elif py is bool:
+                dtype_map[name] = "bool"   # pandas nullable bool
+            elif py is float:
+                dtype_map[name] = "float"
+            elif py is str:
+                dtype_map[name] = "string"
+            elif py.__name__ == "datetime":
+                dtype_map[name] = "datetime64[ns]"
+            elif py.__name__ == "date":
+                dtype_map[name] = "datetime64[ns]"
+            # extend as needed
+
+        # Step 3: apply the dtype map
+        return df.astype(dtype_map)
 
     # TODO: load_feature within date range (reference time/calculation time) / entity ID
     def load_most_recent_feature_value_wrt_reference_time(self, feature_name: str, reference_time: pd.Timestamp = pd.Timestamp.now(),  groupby_key = 'dlznik_id', reference_time_column = 'reference_time'):
@@ -148,21 +192,13 @@ class FeatureStoreClient():
         schema_name, table_name = self._validate_feature_metadata(metadata)
         versioned_data = self._wrap_feature_data(data, metadata)
 
-        if metadata.event_id_name:
-            if metadata.event_id_name not in versioned_data.columns:
-                raise ValueError(f"unique_ID_column '{metadata.event_id_name}' is not present in the provided data.")
-            try:
-                existing_entries_df = self.load_feature(metadata.feature_name)
-                existing_entries = existing_entries_df[metadata.event_id_name].to_numpy()
-            except FeatureNotFoundError:
-                print(f"Feature '{metadata.feature_name}' not found in the database. No existing entries to compare against. Writing all data.")
-            except Exception as e:
-                raise RuntimeError(f"Error loading existing entries for feature '{metadata.feature_name}': {e}")
-
-            data_to_write = versioned_data[~versioned_data[metadata.event_id_name].isin(existing_entries)]
+        if metadata.feature_type == Type.FeatureType.EVENT:
+            existing_entries_df = self.load_feature(metadata.feature_name)
+            existing_entries = existing_entries_df.event_id.to_numpy()
+            data_to_write = versioned_data[~versioned_data.event_id.isin(existing_entries)]
             print(f"Removing existing entries from the data to be written. {len(data_to_write)} records remaining.")
         else:
-            print(f"No unique_ID_column provided. Writing all data to the database.")
+            print(f"No event ID for this feature. Writing all data to the database.")
             data_to_write = versioned_data
 
         try:
@@ -205,7 +241,9 @@ class FeatureStoreClient():
         # if any value is null/NA the != operator returns True.
         # We actually want to write all these cases except when both values were calculated to be null.
         # This is equivalent to (both_values_null & old_value_calculated) because new_value_calculate is always True (otherwise it would not be part of the result in merge_asof)
+
         equal_values = (feature_plus_latest_df[metadata.value_column + '_new'] == feature_plus_latest_df[metadata.value_column + '_current']).to_numpy()
+        equal_values[pd.isna(equal_values)] = False # make sure that pd.NA values are treated as unequal and not as NA
         old_value_calculated = feature_plus_latest_df['calculation_time_current'].notna()
         both_values_null = feature_plus_latest_df[metadata.value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[metadata.value_column + '_current'].isnull().to_numpy()
         update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
@@ -235,12 +273,11 @@ class FeatureStoreClient():
                          entities_to_collect : np.ndarray,
                          reference_times : datetime.datetime | np.ndarray[datetime.datetime],
                          features_to_collect : np.ndarray[str],
-                         output_reference_time_column : str = 'reference_time',
-                         return_reference_time_column: bool = False,
+                         output_reference_time_column : str = None,
                          ) -> pd.DataFrame:
         # connect to the feature store
 
-        entities_to_collect = general_utils.to_array(entities_to_collect)
+        entities_to_collect = general_utils.to_array(entities_to_collect).astype(float) # TODO: entity ID type? - hardcoded to be float here; move elsewhere
         reference_times = general_utils.to_datetime_array(reference_times)
         features_to_collect = general_utils.to_array(features_to_collect)
 
@@ -250,13 +287,8 @@ class FeatureStoreClient():
 
         if len(features_to_collect) == 0:
             return all_features_df, matched_df, stale_df
-
-        if len(reference_times) == 1:
-            reference_times = np.full(len(entities_to_collect), reference_times[0], dtype='datetime64[ns]')
-        elif len(entities_to_collect) != len(reference_times):
-            raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
         
-        if output_reference_time_column in features_to_collect:
+        if output_reference_time_column is not None and output_reference_time_column in features_to_collect:
             raise ValueError(f"The output_reference_time_column '{output_reference_time_column}' cannot be in features_to_collect. Rename it to avoid conflicts.")
 
         # check that all features_to_collect are 1) registered 
@@ -281,7 +313,7 @@ class FeatureStoreClient():
             historical_data, matched_flag, stale_flag = self.get_historical_data(all_values_df=loaded_feature,
                                                           entities=entities_to_collect,
                                                           reference_times=reference_times,
-                                                          reference_time_column=output_reference_time_column,
+                                                          reference_time_column='reference_time',
                                                           expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None))
 
             # assign to all_features_df
@@ -289,16 +321,15 @@ class FeatureStoreClient():
             matched_df[feature_metadata.feature_name] = matched_flag
             stale_df[feature_metadata.feature_name] = stale_flag
 
-        # return_reference_time_column?
-        if return_reference_time_column:
+        # return reference_time as a column?
+        if output_reference_time_column is not None:
             all_features_df[output_reference_time_column] = reference_times
             
         # return the collected features
         return all_features_df, matched_df, stale_df
 
     def get_historical_data(self, all_values_df: pd.DataFrame, entities: list, reference_times: list, reference_time_column: str, expiration_days: int = None) -> np.ndarray:
-        value_column = all_values_df.columns[1]  # assuming the first column is the value column
-        null_value = self.dtype_null_value(all_values_df.dtypes[value_column])
+        null_value = self.dtype_null_value(all_values_df.dtypes['value'])
         matched_flag_name = '__matched_flag' if '__matched_flag' not in all_values_df.columns else '___matched_flag'
         all_values_df[matched_flag_name] = True
         
@@ -306,7 +337,7 @@ class FeatureStoreClient():
         entity_df = pd.DataFrame({'entity_id': entities, reference_time_column: reference_times, original_order_index_name: list(range(len(entities)))})
         
         all_values_df = all_values_df.sort_values(by=[reference_time_column])
-        all_values_df[f'{reference_time_column}_feat'] = all_values_df[reference_time_column]
+        all_values_df[f'{reference_time_column}_loaded_feature'] = all_values_df[reference_time_column]
 
         sorted_entity_df = entity_df.sort_values(by=[reference_time_column])
 
@@ -317,7 +348,7 @@ class FeatureStoreClient():
             by='entity_id',
             on=reference_time_column,
             direction="backward",
-            suffixes=("", "_feat"),
+            suffixes=("", "_loaded_feature"),
         )
 
         merged.sort_values(by=original_order_index_name, inplace=True)
@@ -326,15 +357,15 @@ class FeatureStoreClient():
 
         if expiration_days is not None:
             # Remove values that are too old
-            age = (merged[reference_time_column] - merged[f"{reference_time_column}_feat"]).dt.days.to_numpy()
+            age = (merged[reference_time_column] - merged[f"{reference_time_column}_loaded_feature"]).dt.days.to_numpy()
             stale_flag = (age > expiration_days).astype(bool)
-            merged.loc[:, value_column] = merged.loc[:, value_column].where(~stale_flag, other=null_value)
+            merged.loc[:, 'value'] = merged.loc[:, 'value'].where(~stale_flag, other=null_value)
         else:
             stale_flag = np.full(merged.shape[0], False, dtype=bool)
 
         if null_value is not None:
-            merged.loc[:, value_column] = merged.loc[:, value_column].fillna(null_value)
-        return merged[value_column].to_numpy(), matched_flag, stale_flag
+            merged.loc[:, 'value'] = merged.loc[:, 'value'].fillna(null_value)
+        return merged['value'].to_numpy(), matched_flag, stale_flag
 
     def dtype_null_value(self, dtype):
         if pd.api.types.is_integer_dtype(dtype):
@@ -356,7 +387,7 @@ class FeatureStoreClient():
                                         ) -> pd.DataFrame:
         # connect to the feature store
         try:
-            self.feature_store_client.connect()
+            self.connect()
         except Exception as e:
             raise ConnectionError(f"Failed to connect to the feature store: {e}")
 
@@ -549,17 +580,23 @@ class FeatureStoreClient():
 
             if existing and matching_version:
                 mismatched_values = {}
+                # direct comparison of FeatureRegistry attributes
                 for attr in ['entity_id_name', 'data_type', 'stale_after_n_days']:
                     if getattr(existing, attr) != getattr(feature_metadata, attr):
                         mismatched_values[attr] = (getattr(existing, attr), getattr(feature_metadata, attr))
-                if getattr(existing, 'feature_type') != feature_metadata.feature_type.value:
-                    mismatched_values['feature_type'] = (getattr(existing, 'feature_type'), feature_metadata.feature_type.value)
+                # translated comparison of FeatureRegistry attributes - feature_type and metadata_type
+                for attr in ['feature_type', 'metadata_type']:
+                    if getattr(existing, attr) != getattr(feature_metadata, attr).value:
+                        mismatched_values[attr] = (getattr(existing, attr), getattr(feature_metadata, attr))
+                # direct comparison of FeatureLog attributes
                 for attr in ['description', 'version_description']:
                     if getattr(matching_version[0], attr) != getattr(feature_metadata, attr):
                         mismatched_values[attr] = (getattr(matching_version[0], attr), getattr(feature_metadata, attr))
+                
+                # any mismatches found?
                 if mismatched_values:
                         raise SchemaMismatchError(f"Metadata mismatch for feature '{feature_metadata.feature_name}' version {feature_metadata.version}. Offending entries: {mismatched_values}")
-                return 'features', existing.table_name
+                return self._metadata_type_to_schema(existing.metadata_type), existing.table_name
             else:
                 if not existing:
                     # assign new table name
@@ -571,7 +608,8 @@ class FeatureStoreClient():
                         entity_id_name = feature_metadata.entity_id_name,
                         feature_type = feature_metadata.feature_type.value,
                         data_type = feature_metadata.data_type,
-                        stale_after_n_days = feature_metadata.stale_after_n_days
+                        stale_after_n_days = feature_metadata.stale_after_n_days,
+                        metadata_type = feature_metadata.metadata_type.value
                     )
                     session.add(new_feature)
                     session.commit()
@@ -589,28 +627,39 @@ class FeatureStoreClient():
                     session.add(new_version_log)
                     session.commit()
 
-                return 'features', table_name
+                return self._metadata_type_to_schema(existing.metadata_type), existing.table_name
 
+    def _metadata_type_to_schema(self, metadata_type_str: str) -> str:
+        # metadata_type is either loaded from DB or created as sqlalchemy object -> it is a string, not enum
+        if metadata_type_str == Type.MetadataType.FEATURE.value:
+            return FeatureStoreModel.SCHEMAS.FEATURES.value
+        elif metadata_type_str == Type.MetadataType.PREDICTION.value:
+            return FeatureStoreModel.SCHEMAS.PREDICTIONS.value
+        elif metadata_type_str == Type.MetadataType.METRIC.value:
+            return FeatureStoreModel.SCHEMAS.METRICS.value
+        else:
+            raise ValueError(f"Unsupported metadata type: {metadata_type_str}")
 
     def _wrap_feature_data(self, data : pd.DataFrame, metadata : Metadata ): # version number should be FK
-        data['version'] = metadata.version
+        if metadata.metadata_type == Type.MetadataType.FEATURE:
+            data['version'] = metadata.version
         return data
 
     def _create_table(self, feature_metadata: Metadata.Metadata) -> str:
-        schema_name = 'features'
+        schema_name = self._metadata_type_to_schema(feature_metadata.metadata_type.value)
         candidate_name = f"{feature_metadata.feature_name.lower()}"
 
-        if self._check_if_object_exists(schema = FeatureStoreModel.SCHEMAS.FEATURES.value, table_name = candidate_name):
+        if self._check_if_object_exists(schema = schema_name, table_name = candidate_name):
             return candidate_name
         else:
-            if feature_metadata.feature_type == Type.FeatureType.STATE:
+            if feature_metadata.feature_type == Type.FeatureType.STATE or feature_metadata.feature_type == Type.FeatureType.TIMESTAMP:
                 # Create table with name candidate_name and columns from feature_metadata
                 metadata_obj = MetaData(schema=schema_name)
                 table = Table(
                     candidate_name,
                     metadata_obj,
-                    Column("entity_id", Integer),
-                    Column(feature_metadata.value_column, Numeric),
+                    Column("entity_id", Numeric),
+                    Column(feature_metadata.value_column,  self._translate_data_type(feature_metadata.data_type)),
                     Column(feature_metadata.reference_time_column, DateTime),
                     Column('calculation_time', DateTime),
                     Column('version', Integer),
@@ -618,15 +667,15 @@ class FeatureStoreClient():
                 )
                 metadata_obj.create_all(self.engine)
                 return candidate_name
-            elif metadata.feature_type == Type.FeatureType.EVENT:
+            elif feature_metadata.feature_type == Type.FeatureType.EVENT:
                 # Create table with name candidate_name and columns from feature_metadata
                 metadata_obj = MetaData(schema=schema_name)
                 table = Table(
                     candidate_name,
                     metadata_obj,
-                    Column("event_id", Integer, primary_key=True),
-                    Column("entity_id", Integer),
-                    Column(feature_metadata.value_column, Numeric),
+                    Column("event_id", Numeric, primary_key=True),
+                    Column("entity_id", Numeric),
+                    Column(feature_metadata.value_column, self._translate_data_type(feature_metadata.data_type)),
                     Column(feature_metadata.reference_time_column, DateTime),
                     Column('calculation_time', DateTime),
                     Column('version', Integer),
@@ -635,3 +684,17 @@ class FeatureStoreClient():
                 return candidate_name
             else:
                 raise ValueError(f"Creating feature tables for {feature_metadata.feature_name} of type {feature_metadata.feature_type} is not implemented yet.")
+            
+    def _translate_data_type(self, data_type: str):
+        if data_type == 'float' or data_type == 'numeric':
+            return Numeric
+        elif data_type == 'int':
+            return Integer
+        elif data_type == 'string' or data_type == 'str':
+            return String
+        elif 'datetime' in data_type or 'timestamp' in data_type or data_type == 'date':
+            return DateTime
+        elif data_type == 'bool' or data_type == 'boolean':
+            return Boolean
+        else:
+            raise ValueError(f"Unsupported data type: {data_type}")

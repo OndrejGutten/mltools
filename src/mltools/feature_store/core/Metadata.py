@@ -12,6 +12,7 @@ class Metadata:
     stale_after_n_days : int
     description : str
     version_description : str
+    metadata_type = Type.MetadataType.FEATURE
 
     def __init__(self,
                  feature_name : str,
@@ -38,10 +39,10 @@ class Metadata:
         self.value_column = value_column
         self.reference_time_column = reference_time_column
 
-        Register._FEATURE_REGISTER[self.name] = self
+        Register._FEATURE_REGISTER[self.feature_name] = self
 
     def __hash__(self):
-        return hash(self.name)
-    
+        return hash(self.feature_name)
+
     def __eq__(self, other):
-        return isinstance(other, Metadata) and self.name == other.name
+        return isinstance(other, Metadata) and self.feature_name == other.feature_name
