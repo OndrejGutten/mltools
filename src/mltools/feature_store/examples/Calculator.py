@@ -2,9 +2,9 @@ import sys
 sys.path.insert(0, './src')
 
 from mltools.feature_store.core.Client import FeatureStoreClient
-feature_store_password = "ondrejgutten"
-feature_store_username = "ondrejgutten"
-feature_store_address = "localhost:5432/pokus"
+feature_store_password = "test"
+feature_store_username = "test"
+feature_store_address = "192.168.1.2:5431/FeatureStoreTest"
 
 
 fsc = FeatureStoreClient(db_flavor = 'postgresql+psycopg2', username=feature_store_username, password=feature_store_password, address=feature_store_address)
@@ -29,8 +29,8 @@ meta = Metadata.Metadata(
 )
 
 class TestFeatureCalculator(Calculator.FeatureCalculator):
-    features = [meta]
-    compute_args = ['dlznik_ids']
+    features = [meta] # expected list of Metadata objects
+    compute_args = ['dlznik_ids'] # expected list of argument names for _compute method. These are 
 
     def _compute(self, dlznik_ids: np.ndarray) -> pd.DataFrame:
         midnight = pd.Timestamp.now().normalize()
@@ -108,6 +108,9 @@ print(Register._FEATURE_REGISTER)
 print('registered feature calculators:')
 print(Register._FEATURE_CALCULATOR_REGISTER)
 
-result = TestFeatureCalculator()._compute(np.array([1,2,3,4,5]))
+result = TestFeatureCalculator().compute(
+    dlznik_ids = np.array([1.0,2.0,3.0,4.0,5.0]),
+    irrelevant_argument = np.array(['10', '20', '30', '40', '50']) # this argument will be ignored
+)
 
-fsc.write_feature(result[meta], meta)
+fsc.update_feature(result[meta], meta)

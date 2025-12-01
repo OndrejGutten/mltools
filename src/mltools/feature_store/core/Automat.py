@@ -1,12 +1,34 @@
 import datetime
+from typing import final
 import numpy as np
 import sqlalchemy.engine
+from abc import abstractmethod, ABC
+
 from mltools.utils import errors, report, utils as general_utils
 from mltools.feature_store.utils import utils
-from mltools.feature_store.core import Client, Type, interface
+from mltools.feature_store.core import Client, Type
 
 # TODO: remove path_to_db_pickle
-class FeatureAutomat(interface.FeatureAutomat):
+class FeatureAutomat(ABC):
+    # ===== THIS MUST BE IMPLEMENTED IN SUBCLASSES =====
+    @abstractmethod
+    def setup(self, config: dict):
+        '''
+        Set the features to calculate based on a list of tuples containing feature name and module name.
+        
+        Responsible for setting:
+        self.feature_calculators : dict[str, FeatureCalculator]
+        '''
+        pass
+
+    @abstractmethod
+    def compute_universal_kwargs(self, entities_to_calculate : np.ndarray, reference_times: np.ndarray[datetime.datetime]):
+        '''Set the features to calculate based on a list of tuples containing feature name and module name.'''
+        pass
+    # ===== END OF METHODS TO BE IMPLEMENTED IN SUBCLASSES =====
+
+    # ===== THESE ARE FINAL METHODS, DO NOT OVERRIDE =====
+    @final
     def __init__(self,
                  primary_db_engine : sqlalchemy.engine.base.Engine,
                  feature_store_client : Client,
@@ -24,7 +46,8 @@ class FeatureAutomat(interface.FeatureAutomat):
             self.feature_store_client.connect()
         except Exception as e:
             raise errors.DatabaseConnectionError(f"Failed to connect to databases: {e}")
-        
+
+    @final    
     def calculate_features(self, reference_times: np.ndarray[datetime.datetime], entities_to_calculate: np.ndarray):
 
         entities_to_calculate = general_utils.to_array(entities_to_calculate)
@@ -72,10 +95,12 @@ class FeatureAutomat(interface.FeatureAutomat):
         self._disconnect_from_databases()
         return all_features_dict        
 
+    @final
     def _disconnect_from_databases(self):
         # disconnect from the databases
         self.feature_store_client.disconnect()
 
+    @final
     def _fetch_prerequisite_features(self, feature_calculator , requested_entities : list, reference_times: np.ndarray[datetime.datetime]):
         # fetch prerequisite features for the given feature - only target prerequisite features are currently supported
 
@@ -120,6 +145,7 @@ class FeatureAutomat(interface.FeatureAutomat):
 
         return collected_features, entities_to_ignore_due_to_missing_prerequisite | entities_to_ignore_due_to_stale_prerequisite
 
+    @final
     def _connect_to_databases(self):
         self.feature_store_client.connect()
 

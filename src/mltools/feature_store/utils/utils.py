@@ -13,7 +13,7 @@ import pandas as pd
 import numpy as np
 import unicodedata
 
-from mltools.feature_store.core import interface, Metadata
+from mltools.feature_store.core import Metadata
 from mltools.utils import errors
 from mltools.utils import utils as general_utils
 
@@ -169,54 +169,3 @@ def try_parse(maybe_date : str):
         warnings.warn(f'try_parse failed to interpret: {maybe_date}')
         return pd.NaT
     
-
-# TODO: introduce 'reference_time' string as argument?
-# TODO: does not work for events type features, as they expect ids and this function does not allow for it
-# TODO: move to FeatureStoreClient
-'''
-def DF_states_to_FS(df: pd.DataFrame, client: interface.FeatureStoreClient, path_to_feature_logic : str, reference_time_column: str, entity_column: str, calculation_time : datetime.datetime):
-    """
-    Take a DataFrame with feature values + column with entity_ids + column with reference_times and update each as individual features to the feature store.
-    Only features with FeatureType == STATE are supported (as each feature is contained within one column).
-    Features with FeatureType == EVENT have to be ingested using a different method (as each requires a specific id column definition).
-
-    Names of columns are expected to be in the format:  feature_address = module_name.feature_name
-    """
-
-    if not entity_column in df.columns:
-        raise ValueError(f"Entity column '{entity_column}' not found in input DataFrame.")
-    
-    if not reference_time_column in df.columns:
-        raise ValueError(f"Reference time column '{reference_time_column}' not found in input DataFrame.")
-    
-    if not np.issubdtype(df[reference_time_column].dtype, np.datetime64):
-        raise ValueError(f"Reference time column '{reference_time_column}' must be of datetime type. Got: {df[reference_time_column].dtype}")
-    
-    client.connect()
-
-    value_columns = [col for col in df.columns if col not in [entity_column, reference_time_column]]
-    
-    for col in value_columns:
-        feature = getFeatureMetaData(col, path_to_feature_logic)
-        df_to_update = pd.DataFrame(
-            {
-                entity_column: df[entity_column],
-                feature.name: df[col],
-                reference_time_column: df[reference_time_column],
-                'calculation_time': calculation_time
-            }
-        )
-
-        df_reduced = df_to_update.sort_values([entity_column, reference_time_column])
-        # keep the first record per entity and any record where value != previous value
-        first_record_mask = df_reduced.groupby(entity_column).cumcount() == 0
-        equal_values_mask = df_reduced[feature.name] == df_reduced.groupby(entity_column)[feature.name].shift()
-        both_not_null_mask = df_reduced[feature.name].notnull() & df_reduced.groupby(entity_column)[feature.name].shift().notnull()
-        changed_or_new_rows = (~equal_values_mask & both_not_null_mask) | first_record_mask
-        df_reduced = df_reduced[changed_or_new_rows]
-
-        client.write_feature(
-            feature_name = feature.name,
-            module_name = feature.module_name,
-            feature_df = df_reduced)
-'''

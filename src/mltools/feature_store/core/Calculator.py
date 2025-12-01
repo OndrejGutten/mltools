@@ -1,7 +1,9 @@
+import pandas as pd
+from abc import abstractmethod, ABC
+from typing import final
+
 from mltools.feature_store.utils import utils
-from abc import abstractmethod
-from mltools.feature_store.core import interface
-from mltools.feature_store.core import Register
+from mltools.feature_store.core import Metadata, Register
 
 '''
 ###
@@ -16,12 +18,19 @@ All classes derived from this class pick arguments listed in 'compute_args'. The
 ###
 '''
 
-# FeatureTemplate is an ABSTRACT CLASS!
-class FeatureCalculator(interface.FeatureCalculator):
-    # compute_args is a list of arguments that are expected by the compute method
-    compute_args = []  # subclasses must define this list - these are the arguments passed to the _compute method by parent (FeatureTemplate) compute method
-    prerequisite_features = []  # features this feature depends on from the target database - currently not used
+class FeatureCalculator(ABC):
+    # ===== THIS MUST BE IMPLEMENTED IN SUBCLASSES =====
+    compute_args = []  # compute_args is a list of arguments that are expected by the compute method. Implementations must specify which arguments they need.
+    features : list[Metadata] # list of metadata for features calculated by this calculator. Implementations must specify this.
+    prerequisite_features = []  # features this feature depends on from the FeatureStore database. If any are requested "prerequisite_features" argument must be requested in compute_args. Implementations may use this optionally.
     
+    @abstractmethod
+    def _compute(self, **kwargs) -> dict[Metadata, pd.DataFrame]:
+        '''Compute the feature based using any arguments necessary.'''
+        pass
+
+    # ===== THESE ARE FINAL METHODS, DO NOT OVERRIDE =====
+    @final
     def compute(self, **kwargs):
         # Check required arguments
         missing = [arg for arg in self.compute_args if arg not in kwargs]
@@ -36,6 +45,7 @@ class FeatureCalculator(interface.FeatureCalculator):
         else:
             return self._compute(**{k: kwargs[k] for k in self.compute_args})
 
+    @final
     def _decide_parallelization(self, **kwargs):
         return False
         if 'dlznik_ids' in kwargs and len(kwargs['dlznik_ids']) > 1000 and hasattr(self, 'parallelize') and self.parallelize:
@@ -45,18 +55,7 @@ class FeatureCalculator(interface.FeatureCalculator):
         print('Not parallelizing computation for feature:', self.__class__.__name__)
         return False
 
-    @abstractmethod
-    def _compute(self, **kwargs):
-        pass
-
-    def get_feature_names(self):
-        if not hasattr(self, 'features'):
-            raise ValueError(f"Feature {self} does not have attribute_names defined.")
-        else:
-            if isinstance(self.features, list):
-                return [a.name for a in self.features]
-            return [self.features.name]
-
+    @final
     def __init_subclass__(cls):
         Register._FEATURE_CALCULATOR_REGISTER[cls.__name__] = cls
         return super().__init_subclass__()

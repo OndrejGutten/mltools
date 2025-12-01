@@ -4,7 +4,7 @@ sys.path.insert(0, './src')
 import numpy as np
 import datetime
 import yaml
-from mltools.feature_store.core import Automat, Client, interface
+from mltools.feature_store.core import Automat, Client
 from mltools.utils import report
 
 from mltools.feature_store.examples import Calculator
