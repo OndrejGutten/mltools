@@ -1,4 +1,3 @@
-from importlib_metadata import metadata
 import decimal
 import pandas as pd
 import numpy as np
@@ -189,7 +188,7 @@ class FeatureStoreClient():
 
 
     def write_feature(self, data: pd.DataFrame, metadata: Metadata):
-        schema_name, table_name = self._validate_feature_metadata(metadata)
+        metadata_object, schema_name, table_name = self._validate_feature_metadata(metadata)
         versioned_data = self._wrap_feature_data(data, metadata)
 
         if metadata.feature_type == Type.FeatureType.EVENT:
@@ -206,13 +205,16 @@ class FeatureStoreClient():
                          table_name = table_name,
                          schema_name = schema_name)
             print(f"{data.shape[0]} records for feature '{metadata.feature_name}' written to database.")
-            return data_to_write
         except Exception as e:
             print(f"Error writing feature '{metadata.feature_name}' to database: {e}")    
+        
+        self._log_feature_submission(feature_metadata = metadata_object,
+                                     submitted_data= data,
+                                     written_data = data_to_write)
+        return data_to_write
+
 
     def update_feature(self, data : pd.DataFrame, metadata: Metadata):
-        if data.empty:
-            return data
 
         # TODO: already loaded features could be optionally passed to avoid loading them again
         data = general_utils.sanitize_timestamps(data)
@@ -221,7 +223,14 @@ class FeatureStoreClient():
         if not metadata.value_column in data.columns:
             raise ValueError("value_column must refer to a column in the feature_df")
     
-        schema_name, table_name = self._validate_feature_metadata(metadata)
+        metadata_object, schema_name, table_name = self._validate_feature_metadata(metadata)
+
+        if data.empty:
+            self._log_feature_submission(feature_metadata = metadata_object,
+                    submitted_data= data,
+                    written_data = data)
+            return data
+
         versioned_data = self._wrap_feature_data(data, metadata)
 
         all_values_df = self.load_feature(metadata.feature_name)
@@ -249,13 +258,18 @@ class FeatureStoreClient():
         update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
         changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,'entity_id'].to_numpy()
         update_df = data[data['entity_id'].isin(changed_rows_entities)]
+
         if len(changed_rows_entities) == 0:
             print(f"No changes detected for feature '{metadata.feature_name}'. No data written.")
-            return update_df
+
         else:
             self._to_sql(data=update_df, table_name=table_name, schema_name=schema_name)
             print(f"Changes detected for feature '{metadata.feature_name}'. Writing {update_df.shape[0]} rows to database.")
-            return update_df
+
+        self._log_feature_submission(feature_metadata = metadata_object,
+                            submitted_data= data,
+                            written_data = update_df)
+        return update_df
 
     def _check_if_feature_exists(self, feature_name: str, version : int = None):
         # check if feature exists in the feature registry. If it does, return its metadata
@@ -391,7 +405,7 @@ class FeatureStoreClient():
         except Exception as e:
             raise ConnectionError(f"Failed to connect to the feature store: {e}")
 
-        feature_metadata = Register._FEATURE_REGISTER.get(feature_name, None)
+        feature_metadata = self._check_if_feature_exists(feature_name=feature_name)
 
         if feature_metadata is None:
             raise ValueError(f"Feature metadata '{feature_name}' not found in the feature register.")
@@ -564,6 +578,33 @@ class FeatureStoreClient():
                         dtype = cast_to_numeric_dict,
                         )
 
+    def _log_feature_submission(self, feature_metadata: FeatureStoreModel.FeatureRegistry, submitted_data : pd.DataFrame, written_data : pd.DataFrame):
+        
+        # Reference time is written only if it is equal for all rows; otherwise NULL is stored
+        submitted_rows = submitted_data.shape[0]
+        written_rows = written_data.shape[0]
+        unique_entity_ids_submitted = submitted_data['entity_id'].nunique()
+        unique_reference_times_submitted = submitted_data['reference_time'].nunique()
+        unique_entity_ids_written = written_data['entity_id'].nunique()
+        unique_reference_times_written = written_data['reference_time'].nunique()
+        reference_time = None if unique_reference_times_written != 1 else written_data['reference_time'].iloc[0]
+        submission_time = datetime.datetime.now()
+
+        with Session(self.engine) as session:
+            submission_log = FeatureStoreModel.FeatureSubmissionsLog(
+                feature_id=feature_metadata.id,                
+                submitted_rows=submitted_rows,
+                written_rows=written_rows,
+                unique_entity_ids_submitted=unique_entity_ids_submitted,
+                unique_reference_times_submitted=unique_reference_times_submitted,
+                unique_entity_ids_written=unique_entity_ids_written,
+                unique_reference_times_written=unique_reference_times_written,
+                reference_time_submitted=reference_time,
+                submission_time=submission_time
+            )
+            session.add(submission_log)
+            session.commit()
+
     def _validate_feature_metadata(self, feature_metadata: Metadata):
         '''
         Check if the given feature metadata match any registry entry.
@@ -596,7 +637,7 @@ class FeatureStoreClient():
                 # any mismatches found?
                 if mismatched_values:
                         raise SchemaMismatchError(f"Metadata mismatch for feature '{feature_metadata.feature_name}' version {feature_metadata.version}. Offending entries: {mismatched_values}")
-                return self._metadata_type_to_schema(existing.metadata_type), existing.table_name
+                return existing, self._metadata_type_to_schema(existing.metadata_type), existing.table_name
             else:
                 if not existing:
                     # assign new table name
@@ -627,7 +668,7 @@ class FeatureStoreClient():
                     session.add(new_version_log)
                     session.commit()
 
-                return self._metadata_type_to_schema(existing.metadata_type), existing.table_name
+                return existing, self._metadata_type_to_schema(existing.metadata_type), existing.table_name
 
     def _metadata_type_to_schema(self, metadata_type_str: str) -> str:
         # metadata_type is either loaded from DB or created as sqlalchemy object -> it is a string, not enum

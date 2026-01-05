@@ -5,6 +5,7 @@ sys.path.insert(0, "/Users/ondrejgutten/Work/PISI.nosync/mltools/src")
 
 from mltools.feature_store.core import Metadata, Register, Type
 
+#TODO: REMOVE - this was necessary for unknown reasons; registering predictions metadata is not thought out properly yet
 predictions_dlznik_id_float_metadata = Metadata.Metadata(
     feature_name='dlznik_float',
     entity_id_name='dlznik_id',

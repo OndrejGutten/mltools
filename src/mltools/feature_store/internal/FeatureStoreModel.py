@@ -106,6 +106,24 @@ class FeatureLog(Base):
 
     feature = relationship("FeatureRegistry", back_populates="versions")
 
+class FeatureSubmissionsLog(Base):
+    __tablename__ = "FeatureSubmissionsLog"
+    __table_args__ = {"schema": SCHEMAS.METADATA.value}
+
+    id = Column(Integer, primary_key=True)
+    feature_id = Column(Integer, ForeignKey(FeatureRegistry.id, ondelete='CASCADE'), nullable=False)
+    submitted_rows = Column(Integer, nullable=False)
+    written_rows = Column(Integer, nullable=False)
+    unique_entity_ids_submitted = Column(Integer, nullable=False)
+    unique_reference_times_submitted = Column(Integer, nullable=False)
+    unique_entity_ids_written = Column(Integer, nullable=False)
+    unique_reference_times_written = Column(Integer, nullable=False)
+    reference_time_submitted = Column(DateTime, nullable=True)
+    submission_time = Column(DateTime, nullable=False)
+
+    feature = relationship("FeatureRegistry")
+
+
 class DlznikFloat(Base):
     __tablename__ = "dlznik_float"
     __table_args__ = {"schema": SCHEMAS.PREDICTIONS.value}

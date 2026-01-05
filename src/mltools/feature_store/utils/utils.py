@@ -13,6 +13,8 @@ import pandas as pd
 import numpy as np
 import unicodedata
 
+from param import output
+
 from mltools.feature_store.core import Metadata
 from mltools.utils import errors
 from mltools.utils import utils as general_utils
@@ -168,4 +170,33 @@ def try_parse(maybe_date : str):
     except:
         warnings.warn(f'try_parse failed to interpret: {maybe_date}')
         return pd.NaT
-    
+
+def check_fs_population(DB_credentials_yaml_path: str, start_date: datetime.datetime, end_date: datetime.datetime) -> pd.DataFrame:
+    from sqlalchemy import inspect, text, create_engine
+    import yaml
+    with open(DB_credentials_yaml_path, 'r') as f:
+        DB_creds = yaml.safe_load(f)
+    engine = create_engine(f"postgresql+psycopg2://{DB_creds['feature_store_username']}:{DB_creds['feature_store_password']}@{DB_creds['feature_store_address']}")
+    schema_name = 'features'
+    sql_template = "SELECT DISTINCT reference_time FROM {table};"
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        tables = inspector.get_table_names(schema=schema_name)
+        results={}
+        for table in tables:
+            stmt = text(sql_template.format(table=f'"{schema_name}"."{table}"'))
+            res = conn.execute(stmt)
+            results[table] = res.fetchall()
+            
+    def list_datetimes(start: datetime, end: datetime):
+        return [
+            start + datetime.timedelta(days=i)
+            for i in range((end - start).days + 1)
+        ]
+    output = pd.DataFrame(columns = list(results.keys()), index = list_datetimes(start_date, end_date))
+    for k,v in results.items():
+        for d in v:
+            if d[0] not in output.index:
+                continue
+            output.loc[d[0],k] = True
+    return output
