@@ -118,7 +118,7 @@ class FeatureSubmissionsLog(Base):
     unique_reference_times_submitted = Column(Integer, nullable=False)
     unique_entity_ids_written = Column(Integer, nullable=False)
     unique_reference_times_written = Column(Integer, nullable=False)
-    reference_time_submitted = Column(DateTime, nullable=True)
+    reference_time_written = Column(DateTime, nullable=True)
     submission_time = Column(DateTime, nullable=False)
 
     feature = relationship("FeatureRegistry")

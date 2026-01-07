@@ -1,22 +1,15 @@
 import multiprocessing
-import importlib
 import datetime
-import os
 import warnings
-import sys
 import inspect
 import dateutil
 from functools import partial
-from typing import Callable
-import sys
+from typing import Callable, Literal
 import pandas as pd
 import numpy as np
 import unicodedata
 
-from param import output
-
-from mltools.feature_store.core import Metadata
-from mltools.utils import errors
+from mltools.feature_store.internal import FeatureStoreModel
 from mltools.utils import utils as general_utils
 
 #TODO: staleness must be evaluated wrt multiple reference times
@@ -178,7 +171,7 @@ def check_fs_population(DB_credentials_yaml_path: str, start_date: datetime.date
         DB_creds = yaml.safe_load(f)
     engine = create_engine(f"postgresql+psycopg2://{DB_creds['feature_store_username']}:{DB_creds['feature_store_password']}@{DB_creds['feature_store_address']}")
     schema_name = 'features'
-    sql_template = "SELECT DISTINCT reference_time FROM {table};"
+    sql_template = "SELECT reference_time, COUNT(*) FROM {table} GROUP BY reference_time;"
     with engine.begin() as conn:
         inspector = inspect(conn)
         tables = inspector.get_table_names(schema=schema_name)
@@ -198,5 +191,51 @@ def check_fs_population(DB_credentials_yaml_path: str, start_date: datetime.date
         for d in v:
             if d[0] not in output.index:
                 continue
-            output.loc[d[0],k] = True
+            output.loc[d[0],k] = d[1]
+    return output
+
+def check_fs_submission_log(DB_credentials_yaml_path: str, start_date: datetime.datetime, end_date: datetime.datetime, value : Literal['submitted_rows', 'written_rows', 'unique_entity_ids_submitted', 'unique_reference_times_submitted', 'unique_entity_ids_written', 'unique_reference_times_written', 'reference_time_submitted', 'submission_time']) -> pd.DataFrame:
+    # create sqlalchemy engine using the credentials
+    # read all entries from feature_submission_log table between start_date and end_date
+    # translate the feature_ids to feature names using the relationship in the data model
+    # create a DataFrame with index = dates between start_date and end_date, columns = feature names, values = sum of the specified value for rows where reference_time_submitted = index date
+    # return the DataFrame
+    import yaml
+    from sqlalchemy import MetaData, Table, select, create_engine
+    with open(DB_credentials_yaml_path, 'r') as f:
+        DB_creds = yaml.safe_load(f)
+    engine = create_engine(f"postgresql+psycopg2://{DB_creds['feature_store_username']}:{DB_creds['feature_store_password']}@{DB_creds['feature_store_address']}")
+    schema_name = 'metadata'
+    table_name = 'FeatureSubmissionsLog'
+
+    stmt = (
+        select(
+            FeatureStoreModel.FeatureSubmissionsLog,
+            FeatureStoreModel.FeatureRegistry.feature_name
+        ).join(FeatureStoreModel.FeatureSubmissionsLog.feature)
+    )
+
+    logs_df = pd.read_sql(stmt, engine)
+
+    def list_datetimes(start: datetime, end: datetime):
+        return [
+            start + datetime.timedelta(days=i)
+            for i in range((end - start).days + 1)
+        ]
+    
+    all_requested_datetimes = list_datetimes(start_date, end_date)
+    unique_feature_names = logs_df['feature_name'].unique()
+
+    if value not in logs_df.columns:
+        raise ValueError(f"Value '{value}' not found in FeatureSubmissionsLog columns.")
+
+    output = pd.DataFrame(columns = unique_feature_names, index = all_requested_datetimes)
+
+    grouped = logs_df.groupby(['reference_time_submitted', 'feature_name'])[value].agg(sum)
+    for (ref_time, feature_name), val in grouped.items():
+        if pd.isna(ref_time):
+            continue
+        if ref_time not in output.index:
+            continue
+        output.loc[ref_time, feature_name] = val
     return output

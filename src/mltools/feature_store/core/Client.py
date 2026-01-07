@@ -599,7 +599,7 @@ class FeatureStoreClient():
                 unique_reference_times_submitted=unique_reference_times_submitted,
                 unique_entity_ids_written=unique_entity_ids_written,
                 unique_reference_times_written=unique_reference_times_written,
-                reference_time_submitted=reference_time,
+                reference_time_written=reference_time,
                 submission_time=submission_time
             )
             session.add(submission_log)
