@@ -175,15 +175,18 @@ class FeatureStoreClient():
         current_report = report.Report(f'Feature_submission_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}')
         written_data_list = []
         for feature_metadata, df in calculated_features_dict.items():
-            # and write each DataFrame to the target database
-            current_report.add([feature_metadata.feature_name, 'submitted_rows'], calculated_features_dict.get(feature_metadata).shape[0])
-            if feature_metadata.feature_type == Type.FeatureType.EVENT:
-                written_data = self.write_feature(data = df, metadata = feature_metadata)
-                written_data_list.append(written_data)
-            elif feature_metadata.feature_type == Type.FeatureType.STATE or feature_metadata.feature_type == Type.FeatureType.TIMESTAMP:
-                written_data = self.update_feature(data = df, metadata = feature_metadata)
-                written_data_list.append(written_data)
-            current_report.add([feature_metadata.feature_name, 'written_rows'], written_data.shape[0])
+            try:
+                # and write each DataFrame to the target database
+                current_report.add([feature_metadata.feature_name, 'submitted_rows'], calculated_features_dict.get(feature_metadata).shape[0])
+                if feature_metadata.feature_type == Type.FeatureType.EVENT:
+                    written_data = self.write_feature(data = df, metadata = feature_metadata)
+                    written_data_list.append(written_data)
+                elif feature_metadata.feature_type == Type.FeatureType.STATE or feature_metadata.feature_type == Type.FeatureType.TIMESTAMP:
+                    written_data = self.update_feature(data = df, metadata = feature_metadata)
+                    written_data_list.append(written_data)
+                current_report.add([feature_metadata.feature_name, 'written_rows'], written_data.shape[0])
+            except Exception as e:
+                print(f"ERROR WRITING FEATURE '{feature_metadata.feature_name}' to database: {e}. CONTINUING WITH NEXT FEATURE.")
         return written_data_list, current_report
 
 
