@@ -1,7 +1,6 @@
 import datetime
 import yaml
 from mltools.feature_store.core import Client, Register
-from mltools.feature_store.internal import HardcodedMetadata
 from mltools.utils import utils, report
 import os
 import mlflow
@@ -10,10 +9,10 @@ import pandas as pd
 import numpy as np
     
 class PredictionMaker:
-    def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str):
+    def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str = None):
         self.credentials_yaml_path = credentials_yaml_path
         self.config_yaml_path = config_yaml_path
-        self.report = report.Report(report_name)
+        self.report_name = report_name
     
     def verify_setup(self):
         '''
@@ -53,12 +52,6 @@ class PredictionMaker:
         # interpret config
         self.config = yaml.safe_load(open(self.config_yaml_path, "r"))
 
-        self.path_to_feature_logic = self.config.get("path_to_feature_logic", None)
-        if self.path_to_feature_logic is None:
-            raise ValueError("Path to modules with FeatureCalculators must be specified in the config file under 'path_to_feature_logic'.")
-        if not isinstance(self.path_to_feature_logic, list):
-            self.path_to_feature_logic = [self.path_to_feature_logic]
-
         # check for mlflow
         mlflow_server = self.config.get("mlflow_server", None)
         if mlflow_server is None:
@@ -70,7 +63,7 @@ class PredictionMaker:
 
         print("Setup verification completed successfully.")
 
-    def predict(self, entities: list, reference_times: list[datetime.datetime]):
+    def predict(self, entities: list, reference_times: list[datetime.datetime], ignore_staleness: bool = False):
 
         reference_times = utils.to_datetime_array(reference_times)
 
@@ -79,7 +72,7 @@ class PredictionMaker:
         elif len(entities) != len(reference_times):
             raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
 
-        self.report.add("Number of entities", len(entities))
+        #self.report.add("Number of entities", len(entities))
 
         # construct features list to collect (model to features directory mapping + union of all features)
         all_features = set()
@@ -112,7 +105,7 @@ class PredictionMaker:
                 #featureCollectionReport.add([model_uri,'feature_list_read'], False)
                 continue
 
-            self.report.add("model_uris", model_uri)
+            #self.report.add("model_uris", model_uri)
             
             all_features.update(model_feature_list)
             model_to_features[model_uri] = model_feature_list
@@ -122,7 +115,8 @@ class PredictionMaker:
             entities_to_collect=entities,
             reference_times=reference_times,
             features_to_collect=list(all_features),
-            output_reference_time_column='reference_time'  # required by dates-to-timedeltas preprocessor
+            output_reference_time_column='reference_time',  # required by dates-to-timedeltas preprocessor
+            reference_time_comparison = '<='
         )
 
         # note which entities were not matched or which values were stale
@@ -145,15 +139,15 @@ class PredictionMaker:
             #model_inputs = all_features_df[columns_required_by_model]
             nonmatched_values = (~matched_df).any(axis=1).to_numpy()
             stale_values = stale_df.any(axis=1).to_numpy()
-            valid_inputs_mask = ~nonmatched_values & ~stale_values
+            valid_inputs_mask = ~nonmatched_values & ~stale_values if not ignore_staleness else ~nonmatched_values
             # identify rows with missing values
             model_ok_inputs = all_features_df.loc[valid_inputs_mask, columns_required_by_model]
             #featureCollectionReport.add([model_uri,'debtors_with_valid_data'], model_ok_inputs.shape[0])
             #featureCollectionReport.add([model_uri,'debtors_with_missing_data'], model_inputs.shape[0] - model_ok_inputs.shape[0])
             if model_ok_inputs.empty:
-                self.report.add([model_uri, "number_of_predictions"], 0)
-                self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
-                self.report.add([model_uri, "stale_values"], sum(stale_values))
+                #self.report.add([model_uri, "number_of_predictions"], 0)
+                #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
+                #self.report.add([model_uri, "stale_values"], sum(stale_values))
                 print(f"No valid inputs available for model {model_uri} at reference time {reference_times}. Skipping prediction.")
                 continue
             # load model from mlflow
@@ -170,6 +164,6 @@ class PredictionMaker:
                 "calculation_time": datetime.datetime.now()
             })
             self.feature_store_client.update_feature(data = predictions_df, metadata = prediction_metadata)
-            self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
-            self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
-            self.report.add([model_uri, "stale_values"], sum(stale_values))
+            #self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
+            #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
+            #self.report.add([model_uri, "stale_values"], sum(stale_values))

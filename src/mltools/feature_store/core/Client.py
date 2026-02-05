@@ -1,4 +1,5 @@
 import decimal
+from io import StringIO
 import pandas as pd
 import numpy as np
 import datetime
@@ -11,10 +12,38 @@ from mltools.feature_store.core import Metadata, Register, Type
 from mltools.utils import report, utils as general_utils
 from mltools.utils.errors import FeatureNotFoundError, SchemaMismatchError
 
-from ..internal import FeatureStoreModel
+from ..internal import FeatureStoreModel, HardcodedMetadata
 from sqlalchemy import Boolean, Float, MetaData, PrimaryKeyConstraint, String, Table, Column, Integer, Numeric, DateTime
 
 # TODO: general_utils.sanitize_timestamps should be done at the top, avoid multiple calls
+
+# Source - https://stackoverflow.com/a
+# Posted by jaumebonet
+# Retrieved 2026-01-21, License - CC BY-SA 4.0
+
+import numpy as np
+from psycopg2.extensions import register_adapter, AsIs
+
+def adapt_numpy_array(numpy_array):
+    return AsIs(tuple(numpy_array))
+
+def adapt_numpy_float64(numpy_float64):
+    return AsIs(numpy_float64)
+
+def adapt_numpy_int64(numpy_int64):
+    return AsIs(numpy_int64)
+
+def adapt_numpy_float32(numpy_float32):
+    return AsIs(numpy_float32)
+
+def adapt_numpy_int32(numpy_int32):
+    return AsIs(numpy_int32)
+
+register_adapter(np.float64, adapt_numpy_float64)
+register_adapter(np.int64, adapt_numpy_int64)
+register_adapter(np.float32, adapt_numpy_float32)
+register_adapter(np.int32, adapt_numpy_int32)
+register_adapter(np.ndarray, adapt_numpy_array)
 
 class FeatureStoreClient():
     def __init__(self, db_flavor: str, username : str, password : str, address : str):
@@ -59,7 +88,7 @@ class FeatureStoreClient():
                 if not version_metadata:
                     raise FeatureNotFoundError(f"Feature '{feature_name}' with version '{version}' not found in the feature registry.")
             else:
-                version_metadata = existing.versions.created_at.desc().first()
+                version_metadata = max(existing.versions, key=lambda v: v.created_at)
 
             metadata = Metadata.Metadata(
                 name = existing.feature_name,
@@ -105,8 +134,13 @@ class FeatureStoreClient():
         df = pd.read_sql(table.select().limit(0), engine)
 
         # Step 2: construct dtype map from SQLAlchemy column definitions
-        dtype_map = {}
+        dtype_mapping_dict = self._map_postgres_types_to_pandas(table)
+        
+        return df.astype(dtype_mapping_dict)
 
+    def _map_postgres_types_to_pandas(self, table: Table):
+
+        dtype_map = {}
         for col in table.columns:
             try:
                 py = col.type.python_type   # <— This is the actual correct python type
@@ -116,23 +150,22 @@ class FeatureStoreClient():
 
             name = col.name
             if py is int:
-                dtype_map[name] = "int"     # pandas nullable int
+                dtype_map[name] = "Int64"   # pandas nullable int (capital I)
             elif py is decimal.Decimal:
-                dtype_map[name] = "float"
+                dtype_map[name] = "float64"  # nullable by default
             elif py is bool:
-                dtype_map[name] = "bool"   # pandas nullable bool
+                dtype_map[name] = "boolean"  # pandas nullable bool
             elif py is float:
-                dtype_map[name] = "float"
+                dtype_map[name] = "float64"  # nullable by default
             elif py is str:
-                dtype_map[name] = "string"
+                dtype_map[name] = "string"   # nullable by default
             elif py.__name__ == "datetime":
                 dtype_map[name] = "datetime64[ns]"
             elif py.__name__ == "date":
                 dtype_map[name] = "datetime64[ns]"
             # extend as needed
-
-        # Step 3: apply the dtype map
-        return df.astype(dtype_map)
+        
+        return dtype_map
 
     # TODO: load_feature within date range (reference time/calculation time) / entity ID
     def load_most_recent_feature_value_wrt_reference_time(self, feature_name: str, reference_time: pd.Timestamp = pd.Timestamp.now(),  groupby_key = 'dlznik_id', reference_time_column = 'reference_time'):
@@ -291,6 +324,7 @@ class FeatureStoreClient():
                          reference_times : datetime.datetime | np.ndarray[datetime.datetime],
                          features_to_collect : np.ndarray[str],
                          output_reference_time_column : str = None,
+                         reference_time_comparison: Literal['<=', '<'] = '<' # If the events are logged with a daily resolution (i.e. they happened at any point during the day) then we presume they are not available at the start of the day, so we use '<' comparison. If reading prerequisites we assume these were already calculated with this limitation in mind. Hence, we use '<=' comparison. Example: Event happens on day X and is logged into DB with date X. Features calculated for day X do not know about the event yet. Thus, calculators should see this event only for reference times > X (i.e. we use '<'). The feature will reflect this event on days X+1 and beyond. However, if we are using this feature as a prerequisite we want to use '<=' when retrieving it - otherwise the dependent feature would reflect the event on X+2.
                          ) -> pd.DataFrame:
         # connect to the feature store
 
@@ -322,21 +356,62 @@ class FeatureStoreClient():
 
         feature_staleness_dict = {metadata.feature_name: metadata.stale_after_n_days for metadata in metadata_list}
 
-        for feature_metadata in metadata_list:
-            if feature_metadata is None:
-                raise ValueError(f"Feature metadata '{feature_metadata.feature_name}' not found in the feature register.")
+        # CREATE TEMP TABLE with unique name to avoid conflicts across calls
+        session = Session(self.engine)
+        unique_suffix = int(datetime.datetime.now().timestamp() * 1000000)  # microsecond precision
+        temp_table_name = f"entities_to_collect_{unique_suffix}"
+        
+        session.execute(sqlalchemy.text(f"""
+            CREATE TEMP TABLE {temp_table_name} (
+                row_id serial PRIMARY KEY,
+                entity_id numeric,
+                reference_time timestamp
+            ) ON COMMIT PRESERVE ROWS;
+            """))
 
-            loaded_feature = self.load_feature(feature_name=feature_metadata.feature_name)
-            historical_data, matched_flag, stale_flag = self.get_historical_data(all_values_df=loaded_feature,
-                                                          entities=entities_to_collect,
-                                                          reference_times=reference_times,
-                                                          reference_time_column='reference_time',
-                                                          expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None))
+        buf = StringIO()
+        for i, (e, t) in enumerate(zip(entities_to_collect, reference_times), start=1):
+            buf.write(f"{i}\t{e}\t{t.isoformat()}\n")
+        buf.seek(0)
 
-            # assign to all_features_df
-            all_features_df[feature_metadata.feature_name] = historical_data
-            matched_df[feature_metadata.feature_name] = matched_flag
-            stale_df[feature_metadata.feature_name] = stale_flag
+        # raw psycopg2 cursor
+        conn = session.connection().connection
+        cur = conn.cursor()
+        cur.copy_from(buf, temp_table_name, sep="\t", columns=("row_id", "entity_id", "reference_time"))
+
+        try:
+            for feature_metadata in metadata_list:
+                print(f"Collecting historical data for feature '{feature_metadata.feature_name}'...")
+                if feature_metadata is None:
+                    raise ValueError(f"Feature metadata '{feature_metadata.feature_name}' not found in the feature register.")
+
+                #loaded_feature = self.load_feature(feature_name=feature_metadata.feature_name)
+                #historical_data, matched_flag, stale_flag = self.get_historical_data(all_values_df=loaded_feature,
+                #                                              entities=entities_to_collect,
+                #                                              reference_times=reference_times,
+                #                                              reference_time_column='reference_time',
+                #                                              expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None))
+
+                historical_data, matched_flag, stale_flag = self.get_historical_data_sql(
+                    session,
+                    feature_metadata=feature_metadata,
+                    entities=entities_to_collect,
+                    reference_times=reference_times,
+                    reference_time_comparison=reference_time_comparison,
+                    reference_time_column='reference_time',
+                    expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None),
+                    temp_table_name=temp_table_name,
+                )
+
+                # assign to all_features_df
+                all_features_df[feature_metadata.feature_name] = historical_data
+                matched_df[feature_metadata.feature_name] = matched_flag
+                stale_df[feature_metadata.feature_name] = stale_flag
+        except Exception as e:
+            session.close()
+            raise ValueError(f"Failed to collect historical data: {e}")
+
+        session.close()
 
         # return reference_time as a column?
         if output_reference_time_column is not None:
@@ -344,6 +419,66 @@ class FeatureStoreClient():
             
         # return the collected features
         return all_features_df, matched_df, stale_df
+
+    def get_historical_data_sql(self, session: Session, feature_metadata: Metadata, entities: list, reference_times: list, reference_time_comparison : Literal['<=', '<'], temp_table_name : str, reference_time_column = 'reference_time', expiration_days: int = None,) -> np.ndarray:
+        SQL_QUERY = f"""
+        SELECT
+            l.entity_id,
+            l.reference_time AS left_time,
+            r.{reference_time_column} AS matched_time,
+            r.value AS value
+        FROM {temp_table_name} l
+        LEFT JOIN LATERAL (
+            SELECT r.*
+            FROM features.{feature_metadata.table_name} r
+            WHERE r.entity_id = l.entity_id
+            AND r.reference_time {reference_time_comparison} l.reference_time
+            ORDER BY r.reference_time DESC
+            LIMIT 1
+        ) r ON TRUE
+        ORDER BY l.row_id;
+        """
+
+        # named parameters dict (pass this to session.execute)
+        SQL_PARAMS = {"entities": entities, "reference_times": reference_times}
+
+        # Execute the main query directly and get results as DataFrame
+        result = session.execute(sqlalchemy.text(SQL_QUERY), SQL_PARAMS)
+        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        
+        # Get type mapping from the actual feature table instead of creating temp table
+        if not result_df.empty:
+            # Reflect the actual feature table to get proper type mappings
+            feature_meta = MetaData()
+            feature_table = Table(feature_metadata.table_name, feature_meta, 
+                                schema='features', autoload_with=session.get_bind())
+            
+            # Map types for the columns we actually have
+            type_mapping = {}
+            value_col = next(col for col in feature_table.columns if col.name == 'value')
+            value_col_copy = Column('value', value_col.type)
+
+            feature_meta_temp = MetaData()
+            type_mapping.update(self._map_postgres_types_to_pandas(Table('temp', feature_meta_temp, value_col_copy)))
+
+            result_df = result_df.astype(type_mapping)
+        
+        matched_flag = result_df['matched_time'].notnull().to_numpy().astype(bool)
+
+        if expiration_days is not None:
+            # Remove values that are too old
+            # null_value = self.dtype_null_value(result_df.dtypes['value'])
+            # compute age in days; if matched_time is None use +inf so it will be treated as stale
+            left = pd.to_datetime(result_df['left_time'])
+            matched = pd.to_datetime(result_df['matched_time'])
+            age = (left - matched).dt.days.fillna(np.inf).to_numpy()
+            stale_flag = (age > expiration_days).astype(bool)
+            #result_df.loc[:, 'value'] = result_df.loc[:, 'value'].where(~stale_flag, other=null_value) # this should not be done here - stale values may be returned and it is the user's decision to decide if those with a stale flag should be used or not
+        else:
+            stale_flag = np.full(result_df.shape[0], False, dtype=bool)
+        
+        return result_df['value'].to_numpy(), matched_flag, stale_flag
+
 
     def get_historical_data(self, all_values_df: pd.DataFrame, entities: list, reference_times: list, reference_time_column: str, expiration_days: int = None) -> np.ndarray:
         null_value = self.dtype_null_value(all_values_df.dtypes['value'])
@@ -466,8 +601,8 @@ class FeatureStoreClient():
             else:
                 for member_id in member_ids:
                     member = session.query(FeatureStoreModel.EntitySetMember).filter_by(member_id=member_id).first()
-                if member in entity_set.members:
-                    entity_set.members.remove(member)
+                    if member in entity_set.members:
+                        entity_set.members.remove(member)
             session.commit()
 
     def change_members_of_entity_set(self, entity_set_name : str, member_ids : list[int], mode : Literal['add','set']):
@@ -742,3 +877,4 @@ class FeatureStoreClient():
             return Boolean
         else:
             raise ValueError(f"Unsupported data type: {data_type}")
+

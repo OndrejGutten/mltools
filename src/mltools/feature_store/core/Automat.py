@@ -137,6 +137,7 @@ class FeatureAutomat(ABC):
             reference_times=general_utils.to_datetime_array(reference_times),
             features_to_collect=feature_calculator.prerequisite_features,
             output_reference_time_column='reference_time',
+            reference_time_comparison='<=',
             )
         entities_to_ignore_due_to_missing_prerequisite = ~matched_flags.any(axis=1).to_numpy(bool) if not matched_flags.empty else np.full(len(requested_entities), False)
         entities_to_ignore_due_to_stale_prerequisite = stale_flags.any(axis=1).to_numpy(bool) if not stale_flags.empty else np.full(len(requested_entities), False)
