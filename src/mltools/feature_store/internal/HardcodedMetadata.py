@@ -11,7 +11,7 @@ predictions_dlznik_float_metadata = Metadata.Metadata(
     entity_id_name='dlznik_id',
     feature_type=Type.FeatureType.STATE,
     data_type='float',
-    stale_after_n_days=30,
+    stale_after_n_days=9999,
     description='Predictions for models with entity=dlznik and data_type=float',
     version_description='',
     version = 1,
