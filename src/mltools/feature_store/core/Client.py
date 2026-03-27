@@ -250,7 +250,7 @@ class FeatureStoreClient():
         return data_to_write
 
 
-    def update_feature(self, data : pd.DataFrame, metadata: Metadata):
+    def update_feature(self, data : pd.DataFrame, metadata: Metadata, model_id = None):
 
         # TODO: already loaded features could be optionally passed to avoid loading them again
         data = general_utils.sanitize_timestamps(data)
@@ -269,7 +269,12 @@ class FeatureStoreClient():
 
         versioned_data = self._wrap_feature_data(data, metadata)
 
-        all_values_df = self.load_feature(metadata.feature_name)
+        if schema_name == 'predictions' and model_id is not None:
+            all_values_df = pd.read_sql(f"""SELECT * FROM {schema_name}.{table_name} as pt WHERE pt.model_id = {str(model_id)}""", self.engine)
+        else:
+            all_values_df = self.load_feature(metadata.feature_name)
+
+
         all_values_df.sort_values(by=metadata.reference_time_column, inplace=True)
         
         feature_plus_latest_df = pd.merge_asof(
@@ -420,17 +425,26 @@ class FeatureStoreClient():
         # return the collected features
         return all_features_df, matched_df, stale_df
 
-    def get_historical_data_sql(self, session: Session, feature_metadata: Metadata, entities: list, reference_times: list, reference_time_comparison : Literal['<=', '<'], temp_table_name : str, reference_time_column = 'reference_time', expiration_days: int = None,) -> np.ndarray:
+    def get_historical_data_sql(self, session: Session, feature_metadata: Metadata.Metadata, entities: list, reference_times: list, reference_time_comparison : Literal['<=', '<'], temp_table_name : str, reference_time_column = 'reference_time', expiration_days: int = None,) -> np.ndarray:
+
+        if feature_metadata.metadata_type == Type.MetadataType.FEATURE.value:
+            schema_name = "features"
+            value_name = "value"
+        else:
+            schema_name = "predictions"
+            value_name = "prediction"
+
+
         SQL_QUERY = f"""
         SELECT
             l.entity_id,
             l.reference_time AS left_time,
             r.{reference_time_column} AS matched_time,
-            r.value AS value
+            r.{value_name} AS value
         FROM {temp_table_name} l
         LEFT JOIN LATERAL (
             SELECT r.*
-            FROM features.{feature_metadata.table_name} r
+            FROM {schema_name}.{feature_metadata.table_name} r
             WHERE r.entity_id = l.entity_id
             AND r.reference_time {reference_time_comparison} l.reference_time
             ORDER BY r.reference_time DESC
@@ -451,11 +465,11 @@ class FeatureStoreClient():
             # Reflect the actual feature table to get proper type mappings
             feature_meta = MetaData()
             feature_table = Table(feature_metadata.table_name, feature_meta, 
-                                schema='features', autoload_with=session.get_bind())
+                                schema=schema_name, autoload_with=session.get_bind())
             
             # Map types for the columns we actually have
             type_mapping = {}
-            value_col = next(col for col in feature_table.columns if col.name == 'value')
+            value_col = next(col for col in feature_table.columns if col.name == 'value' or col.name == 'prediction')
             value_col_copy = Column('value', value_col.type)
 
             feature_meta_temp = MetaData()

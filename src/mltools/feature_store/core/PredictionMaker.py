@@ -164,7 +164,7 @@ class PredictionMaker:
                 "reference_time": reference_times[valid_inputs_mask],
                 "calculation_time": datetime.datetime.now()
             })
-            self.feature_store_client.update_feature(data = predictions_df, metadata = prediction_metadata)
+            self.feature_store_client.update_feature(data = predictions_df, metadata = prediction_metadata, model_id = model_id)
             #self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
             #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
             #self.report.add([model_uri, "stale_values"], sum(stale_values))
