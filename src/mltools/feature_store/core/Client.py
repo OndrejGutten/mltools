@@ -277,33 +277,32 @@ class FeatureStoreClient():
 
         all_values_df.sort_values(by=metadata.reference_time_column, inplace=True)
 
-        # Ensure reference_time_column is datetime64[ns] in both DataFrames
-        # (empty DataFrames may infer datetime columns as object type)
-        all_values_df[metadata.reference_time_column] = pd.to_datetime(all_values_df[metadata.reference_time_column])
-        versioned_data[metadata.reference_time_column] = pd.to_datetime(versioned_data[metadata.reference_time_column])
+        if all_values_df.empty:
+            update_df = data
+            changed_rows_entities = update_df.entity_id
+        else:
+            feature_plus_latest_df = pd.merge_asof(
+                    versioned_data,
+                    all_values_df,
+                    on=metadata.reference_time_column,
+                    by='entity_id',
+                    direction='backward',
+                    suffixes=('_new', '_current')
+            )
 
-        feature_plus_latest_df = pd.merge_asof(
-                versioned_data,
-                all_values_df,
-                on=metadata.reference_time_column,
-                by='entity_id',
-                direction='backward',
-                suffixes=('_new', '_current')
-        )
+            # changed rows:
+            # new value has to be different for the update to happen (~equal_values)
+            # if any value is null/NA the != operator returns True.
+            # We actually want to write all these cases except when both values were calculated to be null.
+            # This is equivalent to (both_values_null & old_value_calculated) because new_value_calculate is always True (otherwise it would not be part of the result in merge_asof)
 
-        # changed rows:
-        # new value has to be different for the update to happen (~equal_values)
-        # if any value is null/NA the != operator returns True.
-        # We actually want to write all these cases except when both values were calculated to be null.
-        # This is equivalent to (both_values_null & old_value_calculated) because new_value_calculate is always True (otherwise it would not be part of the result in merge_asof)
-
-        equal_values = (feature_plus_latest_df[metadata.value_column + '_new'] == feature_plus_latest_df[metadata.value_column + '_current']).to_numpy()
-        equal_values[pd.isna(equal_values)] = False # make sure that pd.NA values are treated as unequal and not as NA
-        old_value_calculated = feature_plus_latest_df['calculation_time_current'].notna()
-        both_values_null = feature_plus_latest_df[metadata.value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[metadata.value_column + '_current'].isnull().to_numpy()
-        update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
-        changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,'entity_id'].to_numpy()
-        update_df = data[data['entity_id'].isin(changed_rows_entities)]
+            equal_values = (feature_plus_latest_df[metadata.value_column + '_new'] == feature_plus_latest_df[metadata.value_column + '_current']).to_numpy()
+            equal_values[pd.isna(equal_values)] = False # make sure that pd.NA values are treated as unequal and not as NA
+            old_value_calculated = feature_plus_latest_df['calculation_time_current'].notna()
+            both_values_null = feature_plus_latest_df[metadata.value_column + '_new'].isnull().to_numpy() & feature_plus_latest_df[metadata.value_column + '_current'].isnull().to_numpy()
+            update_mask = ~equal_values & ~(both_values_null & old_value_calculated)
+            changed_rows_entities = feature_plus_latest_df[update_mask].loc[:,'entity_id'].to_numpy()
+            update_df = data[data['entity_id'].isin(changed_rows_entities)]
 
         if len(changed_rows_entities) == 0:
             print(f"No changes detected for feature '{metadata.feature_name}'. No data written.")
