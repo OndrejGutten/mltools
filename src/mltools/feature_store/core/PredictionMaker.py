@@ -8,6 +8,7 @@ import mlflow
 import mltools
 import pandas as pd
 import numpy as np
+import shutil
     
 class PredictionMaker:
     def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str = None):
@@ -93,14 +94,14 @@ class PredictionMaker:
         for model_uri in model_to_prediction_address.keys():
             #featureCollectionReport.add(model_uri, {})
             model_to_mlflow_uri[model_uri] = model_uri
-            mlflow.models.get_model_info(model_uri=model_uri)  # this will raise an error if the model does not exist
             #featureCollectionReport.add([model_uri,'found_in_mlflow'], True)
             # look for artifact with name features.yaml
             try:
-                model_feature_list_path = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
+                mlflow.models.get_model_info(model_uri=model_uri)  # this will raise an error if the model does not exist
+                model_feature_list_path, temp_dir = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
                 model_feature_list = yaml.safe_load(open(model_feature_list_path, "r"))
+                shutil.rmtree(temp_dir, ignore_errors=True)  # clean up temp directory
                 #featureCollectionReport.add([model_uri,'feature_list_read'], True)
-                os.remove(model_feature_list_path)  # clean up downloaded file
             except Exception as e:
                 print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
                 #featureCollectionReport.add([model_uri,'feature_list_read'], False)
