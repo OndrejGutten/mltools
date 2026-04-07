@@ -97,7 +97,6 @@ class PredictionMaker:
             #featureCollectionReport.add([model_uri,'found_in_mlflow'], True)
             # look for artifact with name features.yaml
             try:
-                mlflow.models.get_model_info(model_uri=model_uri)  # this will raise an error if the model does not exist
                 model_feature_list_path, temp_dir = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
                 model_feature_list = yaml.safe_load(open(model_feature_list_path, "r"))
                 shutil.rmtree(temp_dir, ignore_errors=True)  # clean up temp directory
