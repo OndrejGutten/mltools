@@ -276,7 +276,12 @@ class FeatureStoreClient():
 
 
         all_values_df.sort_values(by=metadata.reference_time_column, inplace=True)
-        
+
+        # Ensure reference_time_column is datetime64[ns] in both DataFrames
+        # (empty DataFrames may infer datetime columns as object type)
+        all_values_df[metadata.reference_time_column] = pd.to_datetime(all_values_df[metadata.reference_time_column])
+        versioned_data[metadata.reference_time_column] = pd.to_datetime(versioned_data[metadata.reference_time_column])
+
         feature_plus_latest_df = pd.merge_asof(
                 versioned_data,
                 all_values_df,
