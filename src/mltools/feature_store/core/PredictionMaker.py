@@ -9,6 +9,7 @@ import mltools
 import pandas as pd
 import numpy as np
 import shutil
+import tempfile
     
 class PredictionMaker:
     def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str = None):
@@ -66,105 +67,119 @@ class PredictionMaker:
         print("Setup verification completed successfully.")
 
     def predict(self, entities: list, reference_times: list[datetime.datetime], ignore_staleness: bool = False):
+        # Track all temp directories created during predict() and clean them up at the end
+        temp_dirs_created = []
+        original_mkdtemp = tempfile.mkdtemp
 
-        reference_times = utils.to_datetime_array(reference_times)
+        def tracked_mkdtemp(*args, **kwargs):
+            temp_dir = original_mkdtemp(*args, **kwargs)
+            temp_dirs_created.append(temp_dir)
+            return temp_dir
 
-        if len(reference_times) == 1:
-            reference_times = np.full(len(entities), reference_times[0], dtype='datetime64[ns]')
-        elif len(entities) != len(reference_times):
-            raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
+        tempfile.mkdtemp = tracked_mkdtemp
+        try:
+            reference_times = utils.to_datetime_array(reference_times)
 
-        #self.report.add("Number of entities", len(entities))
+            if len(reference_times) == 1:
+                reference_times = np.full(len(entities), reference_times[0], dtype='datetime64[ns]')
+            elif len(entities) != len(reference_times):
+                raise ValueError("When passing multiple reference times, the number of entities to collect must match the number of reference times.")
 
-        # construct features list to collect (model to features directory mapping + union of all features)
-        all_features = set()
-        model_to_features = {}
-        model_to_mlflow_uri = {}
-        models_config = self.config.get("models", [])
-        if not models_config:
-            raise ValueError("No models specified in the configuration file under 'models'. Please provide at least one model.")
-        
-        model_to_prediction_address = {}
-        for model_entry in models_config:
-            model_uri = model_entry.get("model_uri", None)
-            prediction_address = model_entry.get("predicition_address", None)
-            model_to_prediction_address[model_uri] = prediction_address 
+            #self.report.add("Number of entities", len(entities))
 
-        # Make a set of features required by all models
-        for model_uri in model_to_prediction_address.keys():
-            #featureCollectionReport.add(model_uri, {})
-            model_to_mlflow_uri[model_uri] = model_uri
-            #featureCollectionReport.add([model_uri,'found_in_mlflow'], True)
-            # look for artifact with name features.yaml
-            try:
-                model_feature_list_path, temp_dir = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
-                model_feature_list = yaml.safe_load(open(model_feature_list_path, "r"))
-                shutil.rmtree(temp_dir, ignore_errors=True)  # clean up temp directory
-                #featureCollectionReport.add([model_uri,'feature_list_read'], True)
-            except Exception as e:
-                print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
-                #featureCollectionReport.add([model_uri,'feature_list_read'], False)
-                continue
+            # construct features list to collect (model to features directory mapping + union of all features)
+            all_features = set()
+            model_to_features = {}
+            model_to_mlflow_uri = {}
+            models_config = self.config.get("models", [])
+            if not models_config:
+                raise ValueError("No models specified in the configuration file under 'models'. Please provide at least one model.")
 
-            #self.report.add("model_uris", model_uri)
-            
-            all_features.update(model_feature_list)
-            model_to_features[model_uri] = model_feature_list
+            model_to_prediction_address = {}
+            for model_entry in models_config:
+                model_uri = model_entry.get("model_uri", None)
+                prediction_address = model_entry.get("predicition_address", None)
+                model_to_prediction_address[model_uri] = prediction_address
 
-        # collect features
-        all_features_df, matched_df, stale_df = self.feature_store_client.collect_features(
-            entities_to_collect=entities,
-            reference_times=reference_times,
-            features_to_collect=list(all_features),
-            output_reference_time_column='reference_time',  # required by dates-to-timedeltas preprocessor
-            reference_time_comparison = '<='
-        )
+            # Make a set of features required by all models
+            for model_uri in model_to_prediction_address.keys():
+                #featureCollectionReport.add(model_uri, {})
+                model_to_mlflow_uri[model_uri] = model_uri
+                #featureCollectionReport.add([model_uri,'found_in_mlflow'], True)
+                # look for artifact with name features.yaml
+                try:
+                    model_feature_list_path = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
+                    model_feature_list = yaml.safe_load(open(model_feature_list_path, "r"))
+                    #featureCollectionReport.add([model_uri,'feature_list_read'], True)
+                except Exception as e:
+                    print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
+                    #featureCollectionReport.add([model_uri,'feature_list_read'], False)
+                    continue
 
-        # note which entities were not matched or which values were stale
-        nonmatched_values = (~matched_df).any(axis=1).index
-        #featureCollectionReport.add("nonmatched_values", nonmatched_values)
-        stale_values = stale_df.any(axis=1).index
-        #featureCollectionReport.add("stale_values", stale_values)
+                #self.report.add("model_uris", model_uri)
 
-        # make predictions for entities with valid inputs
-        for model_uri, prediction_address in model_to_prediction_address.items():
-            prediction_metadata = Register._FEATURE_REGISTER.get(prediction_address, None)
-            if prediction_metadata is None:
-                raise ValueError(f"Prediction address {prediction_address} not found in feature register. Have you imported it?")
-            
-            # check if all features share the entity type
-            model_entity_id_names = [Register._FEATURE_REGISTER.get(feature).entity_id_name for feature in model_to_features[model_uri]]
-            if not all(entity_id_name == model_entity_id_names[0] for entity_id_name in model_entity_id_names):
-                raise ValueError(f"Features required by model {model_uri} do not share the same entity ID column. Found: {model_entity_id_names}")
-            columns_required_by_model = model_to_features[model_uri] + ['reference_time']
-            #model_inputs = all_features_df[columns_required_by_model]
-            nonmatched_values = (~matched_df).any(axis=1).to_numpy()
-            stale_values = stale_df.any(axis=1).to_numpy()
-            valid_inputs_mask = ~nonmatched_values & ~stale_values if not ignore_staleness else ~nonmatched_values
-            # identify rows with missing values
-            model_ok_inputs = all_features_df.loc[valid_inputs_mask, columns_required_by_model]
-            #featureCollectionReport.add([model_uri,'debtors_with_valid_data'], model_ok_inputs.shape[0])
-            #featureCollectionReport.add([model_uri,'debtors_with_missing_data'], model_inputs.shape[0] - model_ok_inputs.shape[0])
-            if model_ok_inputs.empty:
-                #self.report.add([model_uri, "number_of_predictions"], 0)
+                all_features.update(model_feature_list)
+                model_to_features[model_uri] = model_feature_list
+
+            # collect features
+            all_features_df, matched_df, stale_df = self.feature_store_client.collect_features(
+                entities_to_collect=entities,
+                reference_times=reference_times,
+                features_to_collect=list(all_features),
+                output_reference_time_column='reference_time',  # required by dates-to-timedeltas preprocessor
+                reference_time_comparison = '<='
+            )
+
+            # note which entities were not matched or which values were stale
+            nonmatched_values = (~matched_df).any(axis=1).index
+            #featureCollectionReport.add("nonmatched_values", nonmatched_values)
+            stale_values = stale_df.any(axis=1).index
+            #featureCollectionReport.add("stale_values", stale_values)
+
+            # make predictions for entities with valid inputs
+            for model_uri, prediction_address in model_to_prediction_address.items():
+                prediction_metadata = Register._FEATURE_REGISTER.get(prediction_address, None)
+                if prediction_metadata is None:
+                    raise ValueError(f"Prediction address {prediction_address} not found in feature register. Have you imported it?")
+
+                # check if all features share the entity type
+                model_entity_id_names = [Register._FEATURE_REGISTER.get(feature).entity_id_name for feature in model_to_features[model_uri]]
+                if not all(entity_id_name == model_entity_id_names[0] for entity_id_name in model_entity_id_names):
+                    raise ValueError(f"Features required by model {model_uri} do not share the same entity ID column. Found: {model_entity_id_names}")
+                columns_required_by_model = model_to_features[model_uri] + ['reference_time']
+                #model_inputs = all_features_df[columns_required_by_model]
+                nonmatched_values = (~matched_df).any(axis=1).to_numpy()
+                stale_values = stale_df.any(axis=1).to_numpy()
+                valid_inputs_mask = ~nonmatched_values & ~stale_values if not ignore_staleness else ~nonmatched_values
+                # identify rows with missing values
+                model_ok_inputs = all_features_df.loc[valid_inputs_mask, columns_required_by_model]
+                #featureCollectionReport.add([model_uri,'debtors_with_valid_data'], model_ok_inputs.shape[0])
+                #featureCollectionReport.add([model_uri,'debtors_with_missing_data'], model_inputs.shape[0] - model_ok_inputs.shape[0])
+                if model_ok_inputs.empty:
+                    #self.report.add([model_uri, "number_of_predictions"], 0)
+                    #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
+                    #self.report.add([model_uri, "stale_values"], sum(stale_values))
+                    print(f"No valid inputs available for model {model_uri} at reference time {reference_times}. Skipping prediction.")
+                    continue
+                # load model from mlflow
+                model = mltools.model.load_model({'model' : {'uri' : model_uri}})
+                predictions = model.predict_proba(model_ok_inputs)
+                # translate model_uri to ID
+                model_id = self.feature_store_client.assign_model_id(model_uri=model_uri)
+                # log predictions to DB
+                predictions_df = pd.DataFrame({
+                    "entity_id": model_ok_inputs.index,
+                    "prediction": predictions,
+                    "model_id": model_id,
+                    "reference_time": reference_times[valid_inputs_mask],
+                    "calculation_time": datetime.datetime.now()
+                })
+                self.feature_store_client.update_feature(data = predictions_df, metadata = prediction_metadata, model_id = model_id)
+                #self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
                 #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
                 #self.report.add([model_uri, "stale_values"], sum(stale_values))
-                print(f"No valid inputs available for model {model_uri} at reference time {reference_times}. Skipping prediction.")
-                continue
-            # load model from mlflow
-            model = mltools.model.load_model({'model' : {'uri' : model_uri}})
-            predictions = model.predict_proba(model_ok_inputs)
-            # translate model_uri to ID
-            model_id = self.feature_store_client.assign_model_id(model_uri=model_uri)
-            # log predictions to DB
-            predictions_df = pd.DataFrame({
-                "entity_id": model_ok_inputs.index,
-                "prediction": predictions,
-                "model_id": model_id,
-                "reference_time": reference_times[valid_inputs_mask],
-                "calculation_time": datetime.datetime.now()
-            })
-            self.feature_store_client.update_feature(data = predictions_df, metadata = prediction_metadata, model_id = model_id)
-            #self.report.add([model_uri, "number_of_predictions"], predictions.shape[0])
-            #self.report.add([model_uri, "nonmatched_values"], sum(nonmatched_values))
-            #self.report.add([model_uri, "stale_values"], sum(stale_values))
+        finally:
+            # Restore original mkdtemp and clean up all tracked temp directories
+            tempfile.mkdtemp = original_mkdtemp
+            for temp_dir in temp_dirs_created:
+                shutil.rmtree(temp_dir, ignore_errors=True)

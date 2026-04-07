@@ -3,8 +3,6 @@ import mlflow
 import pandas as pd
 import os
 import yaml
-import tempfile
-import shutil
 
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -16,7 +14,6 @@ import mltools.logging
 def load_model(config = None, model_uri = None, model_id = None):
     """
     Load a model using a config or model_uri or model_id. Only one may be provided.
-    Temporary downloaded files are cleaned up after loading.
 
     Parameters
     ----------
@@ -59,17 +56,8 @@ def load_model(config = None, model_uri = None, model_id = None):
         if model_uri is None:
             raise ValueError("Model uri not provided.")
 
-    # Download to temp directory and clean up after loading
-    temp_dir = tempfile.mkdtemp(prefix='mlflow_model_')
-    try:
-        model_path = mlflow.artifacts.download_artifacts(
-            artifact_uri=model_uri,
-            dst_path=temp_dir
-        )
-        pyfunc_model = mlflow.pyfunc.load_model(model_path)
-        return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    pyfunc_model = mlflow.pyfunc.load_model(model_uri)
+    return pyfunc_model._PyFuncModel__model_impl.python_model.model # unwrap the model from the pyfunc wrapper
 
 
 def setup_model(config):
@@ -272,51 +260,37 @@ def download_model_artifact(artifact_name, model_uri = None, model_name = None, 
 
     Returns
     -------
-    tuple
-        A tuple of (artifact_path, temp_dir) where artifact_path is the path to the downloaded artifact
-        and temp_dir is the temporary directory containing it. The caller should clean up temp_dir after use.
+    str
+        Path to the downloaded artifact.
     """
 
     if not mltools.logging.is_remote_mlflow_server_running():
         raise RuntimeError("MLflow server is not running. Cannot load model artifact.")
 
-    temp_dir = tempfile.mkdtemp(prefix='mlflow_artifact_')
+    if model_uri is not None:
+        if model_name is not None or model_version is not None or model_alias is not None:
+            raise ValueError("If model_uri is provided, model_name, model_version and model_alias must not be provided.")
+        model_info = mlflow.models.get_model_info(model_uri)
+        artifact = mlflow.artifacts.download_artifacts(run_id = model_info.run_id, artifact_path = f'{model_info.artifact_path}/{artifact_name}')
+        return artifact
+    else:
+        if model_name is None:
+            raise ValueError("Either model_uri or model_name+version/alias must be provided.")
+        if model_version is None and model_alias is None:
+            raise ValueError("If model_name is provided, either model_version or model_alias must be provided.")
+        if model_version is not None and model_alias is not None:
+            raise ValueError("If model_name is provided, either model_version or model_alias must be provided, not both.")
+        if model_version is not None:
+            client = mlflow.MlflowClient()
+            model_version = client.get_model_version(model_name, model_version)
+        elif model_alias is not None:
+            client = mlflow.MlflowClient()
+            model_version = client.get_model_version_by_alias(model_name, model_alias)
 
-    try:
-        if model_uri is not None:
-            if model_name is not None or model_version is not None or model_alias is not None:
-                raise ValueError("If model_uri is provided, model_name, model_version and model_alias must not be provided.")
-            model_info = mlflow.models.get_model_info(model_uri)
-            artifact = mlflow.artifacts.download_artifacts(
-                run_id = model_info.run_id,
-                artifact_path = f'{model_info.artifact_path}/{artifact_name}',
-                dst_path = temp_dir
-            )
-            return artifact, temp_dir
-        else:
-            if model_name is None:
-                raise ValueError("Either model_uri or model_name+version/alias must be provided.")
-            if model_version is None and model_alias is None:
-                raise ValueError("If model_name is provided, either model_version or model_alias must be provided.")
-            if model_version is not None and model_alias is not None:
-                raise ValueError("If model_name is provided, either model_version or model_alias must be provided, not both.")
-            if model_version is not None:
-                client = mlflow.MlflowClient()
-                model_version = client.get_model_version(model_name, model_version)
-            elif model_alias is not None:
-                client = mlflow.MlflowClient()
-                model_version = client.get_model_version_by_alias(model_name, model_alias)
+        # TODO: list artifacts first and check if the artifact exists
 
-            # TODO: list artifacts first and check if the artifact exists
-
-            artifact = mlflow.artifacts.download_artifacts(
-                artifact_uri = model_version.source + '/' + artifact_name,
-                dst_path = temp_dir
-            )
-            return artifact, temp_dir
-    except Exception as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise
+        artifact = mlflow.artifacts.download_artifacts(artifact_uri = model_version.source + '/' + artifact_name)
+        return artifact
 
 def get_model_name_from_uri(uri: str) -> str:
     """
@@ -421,9 +395,8 @@ def get_model_features(model_uri: str) -> list[str]:
         If the model does not have a 'feature_names' attribute.
     """
     try:
-        model_feature_address_path, temp_dir = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
+        model_feature_address_path = mltools.model.download_model_artifact(model_uri = model_uri, artifact_name = 'feature_list.yaml')
         model_feature_addresses = yaml.safe_load(open(model_feature_address_path, "r"))
-        shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception as e:
         print(f"Error downloading feature_list.yaml for model {model_uri}: {e}")
     
