@@ -328,10 +328,87 @@ class FeatureStoreClient():
                     raise ValueError(f"Feature '{feature_name}' version {version} not found in the feature registry.")
             return existing
 
+    @staticmethod
+    def _parse_features_to_collect(features_to_collect) -> tuple[list[str], dict[str, int]]:
+        """Normalize features_to_collect into (feature_names, model_id_by_feature).
+
+        Each entry is either a feature-name string or a single-key dict
+        {feature_name: model_id}. Duplicate feature names (in any form) raise
+        ValueError. A dict with a None value is rejected — pass a bare string
+        instead if no model_id filter is wanted.
+        """
+        if features_to_collect is None:
+            return [], {}
+
+        # Accept a single string/dict for convenience (mirrors to_array behavior).
+        if isinstance(features_to_collect, (str, dict)):
+            features_to_collect = [features_to_collect]
+
+        feature_names: list[str] = []
+        model_id_by_feature: dict[str, int] = {}
+        seen: set[str] = set()
+
+        for entry in features_to_collect:
+            if isinstance(entry, str):
+                name, model_id = entry, None
+            elif isinstance(entry, dict):
+                if len(entry) != 1:
+                    raise ValueError(
+                        f"Dict entries in features_to_collect must have exactly one "
+                        f"key (feature_name: model_id). Got: {entry!r}"
+                    )
+                (name, model_id), = entry.items()
+                if not isinstance(name, str):
+                    raise ValueError(
+                        f"Dict key in features_to_collect must be a feature name string. Got: {name!r}"
+                    )
+                if model_id is None:
+                    raise ValueError(
+                        f"model_id for feature '{name}' is None. Pass the feature as a bare "
+                        f"string '{name}' instead of a dict to disable model_id filtering."
+                    )
+                if not isinstance(model_id, int) or isinstance(model_id, bool):
+                    raise ValueError(
+                        f"model_id for feature '{name}' must be an int. Got: {model_id!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"Entries in features_to_collect must be a feature-name string or a "
+                    f"single-key dict {{feature_name: model_id}}. Got: {entry!r}"
+                )
+
+            if name in seen:
+                raise ValueError(
+                    f"Feature '{name}' appears more than once in features_to_collect."
+                )
+            seen.add(name)
+            feature_names.append(name)
+            if model_id is not None:
+                model_id_by_feature[name] = model_id
+
+        return feature_names, model_id_by_feature
+
+    def _validate_model_ids_exist(self, model_ids: set[int]) -> None:
+        """Raise if any of the supplied model_ids is absent from ModelRegister."""
+        if not model_ids:
+            return
+        with Session(self.engine) as session:
+            found = {
+                row[0]
+                for row in session.query(FeatureStoreModel.ModelRegister.id)
+                .filter(FeatureStoreModel.ModelRegister.id.in_(model_ids))
+                .all()
+            }
+        missing = model_ids - found
+        if missing:
+            raise ValueError(
+                f"model_id(s) not found in ModelRegister: {sorted(missing)}"
+            )
+
     def collect_features(self,
                          entities_to_collect : np.ndarray,
                          reference_times : datetime.datetime | np.ndarray[datetime.datetime],
-                         features_to_collect : np.ndarray[str],
+                         features_to_collect : list[str | dict[str, int]],
                          output_reference_time_column : str = None,
                          reference_time_comparison: Literal['<=', '<'] = '<' # If the events are logged with a daily resolution (i.e. they happened at any point during the day) then we presume they are not available at the start of the day, so we use '<' comparison. If reading prerequisites we assume these were already calculated with this limitation in mind. Hence, we use '<=' comparison. Example: Event happens on day X and is logged into DB with date X. Features calculated for day X do not know about the event yet. Thus, calculators should see this event only for reference times > X (i.e. we use '<'). The feature will reflect this event on days X+1 and beyond. However, if we are using this feature as a prerequisite we want to use '<=' when retrieving it - otherwise the dependent feature would reflect the event on X+2.
                          ) -> pd.DataFrame:
@@ -339,24 +416,52 @@ class FeatureStoreClient():
 
         entities_to_collect = general_utils.to_array(entities_to_collect).astype(float) # TODO: entity ID type? - hardcoded to be float here; move elsewhere
         reference_times = general_utils.to_datetime_array(reference_times)
-        features_to_collect = general_utils.to_array(features_to_collect)
 
-        all_features_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
-        matched_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
-        stale_df = pd.DataFrame(columns = features_to_collect, index = entities_to_collect)
+        # Parse features_to_collect:
+        #   - FEATURE-type features are passed as bare strings.
+        #   - PREDICTION-type features MUST be passed as a single-key dict
+        #     {feature_name: model_id} with an explicit model_id; bare strings
+        #     are not allowed for predictions (enforced after metadata lookup).
+        # Duplicate feature names (in any form) are rejected here.
+        feature_names, model_id_by_feature = self._parse_features_to_collect(features_to_collect)
 
-        if len(features_to_collect) == 0:
+        all_features_df = pd.DataFrame(columns = feature_names, index = entities_to_collect)
+        matched_df = pd.DataFrame(columns = feature_names, index = entities_to_collect)
+        stale_df = pd.DataFrame(columns = feature_names, index = entities_to_collect)
+
+        if len(feature_names) == 0:
             return all_features_df, matched_df, stale_df
-        
-        if output_reference_time_column is not None and output_reference_time_column in features_to_collect:
+
+        if output_reference_time_column is not None and output_reference_time_column in feature_names:
             raise ValueError(f"The output_reference_time_column '{output_reference_time_column}' cannot be in features_to_collect. Rename it to avoid conflicts.")
 
-        # check that all features_to_collect are 1) registered 
-        try: 
-            metadata_list = [self._check_if_feature_exists(feature_name) for feature_name in features_to_collect]
+        # check that all features_to_collect are 1) registered
+        try:
+            metadata_list = [self._check_if_feature_exists(feature_name) for feature_name in feature_names]
         except Exception as e:
             raise ValueError(f"Failed to load feature metadata for features_to_collect: {e}")
-        
+
+        # Guardrails on the FEATURE / PREDICTION contract:
+        #   - model_id may only be supplied for PREDICTION features.
+        #   - PREDICTION features require an explicit model_id (no bare strings).
+        for metadata in metadata_list:
+            has_model_id = metadata.feature_name in model_id_by_feature
+            is_prediction = metadata.metadata_type == Type.MetadataType.PREDICTION.value
+            if has_model_id and not is_prediction:
+                raise ValueError(
+                    f"model_id was supplied for feature '{metadata.feature_name}' but its "
+                    f"metadata_type is '{metadata.metadata_type}', not PREDICTION."
+                )
+            if is_prediction and not has_model_id:
+                raise ValueError(
+                    f"Feature '{metadata.feature_name}' has metadata_type=PREDICTION and "
+                    f"must be passed as a single-key dict {{'{metadata.feature_name}': model_id}} "
+                    f"with an explicit model_id."
+                )
+
+        # Guardrail: every supplied model_id must exist in ModelRegister. Batched, up front.
+        self._validate_model_ids_exist(set(model_id_by_feature.values()))
+
         # check that all features share the same entity type
         entity_id_names = set([metadata.entity_id_name for metadata in metadata_list])
         if len(entity_id_names) > 1:
@@ -410,6 +515,7 @@ class FeatureStoreClient():
                     reference_time_column='reference_time',
                     expiration_days=feature_staleness_dict.get(feature_metadata.feature_name, None),
                     temp_table_name=temp_table_name,
+                    model_id=model_id_by_feature.get(feature_metadata.feature_name),
                 )
 
                 # assign to all_features_df
@@ -429,7 +535,7 @@ class FeatureStoreClient():
         # return the collected features
         return all_features_df, matched_df, stale_df
 
-    def get_historical_data_sql(self, session: Session, feature_metadata: Metadata.Metadata, entities: list, reference_times: list, reference_time_comparison : Literal['<=', '<'], temp_table_name : str, reference_time_column = 'reference_time', expiration_days: int = None,) -> np.ndarray:
+    def get_historical_data_sql(self, session: Session, feature_metadata: Metadata.Metadata, entities: list, reference_times: list, reference_time_comparison : Literal['<=', '<'], temp_table_name : str, reference_time_column = 'reference_time', expiration_days: int = None, model_id: int = None,) -> np.ndarray:
 
         if feature_metadata.metadata_type == Type.MetadataType.FEATURE.value:
             schema_name = "features"
@@ -438,6 +544,10 @@ class FeatureStoreClient():
             schema_name = "predictions"
             value_name = "prediction"
 
+        # Optional model_id filter inside the lateral join. Only meaningful for
+        # PREDICTION tables (FEATURE tables have no model_id column); the caller
+        # is responsible for not passing it for FEATURE features.
+        model_id_filter = "AND r.model_id = :model_id" if model_id is not None else ""
 
         SQL_QUERY = f"""
         SELECT
@@ -451,6 +561,7 @@ class FeatureStoreClient():
             FROM {schema_name}.{feature_metadata.table_name} r
             WHERE r.entity_id = l.entity_id
             AND r.reference_time {reference_time_comparison} l.reference_time
+            {model_id_filter}
             ORDER BY r.reference_time DESC
             LIMIT 1
         ) r ON TRUE
@@ -459,6 +570,8 @@ class FeatureStoreClient():
 
         # named parameters dict (pass this to session.execute)
         SQL_PARAMS = {"entities": entities, "reference_times": reference_times}
+        if model_id is not None:
+            SQL_PARAMS["model_id"] = model_id
 
         # Execute the main query directly and get results as DataFrame
         result = session.execute(sqlalchemy.text(SQL_QUERY), SQL_PARAMS)

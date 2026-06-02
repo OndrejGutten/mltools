@@ -83,7 +83,7 @@ class FeatureAutomat(ABC):
 
             # compute the feature on entities that 1) need recalculation and 2) have all prerequisite features available
             calculated_features_dict = feature_calculator.compute(
-                dlznik_ids = general_utils.to_array(entities_with_preqrequisites, dtype = entities_with_preqrequisites.dtype),
+                entity_ids = general_utils.to_array(entities_with_preqrequisites, dtype = entities_with_preqrequisites.dtype),
                 reference_times = reference_times_with_prerequisites,
                 prerequisite_features = prerequisite_features.loc[~mask_to_ignore_due_invalid_prerequisite, :],
                 feature_store_client = self.feature_store_client,
