@@ -1,7 +1,6 @@
 import datetime
 import yaml
 from mltools.feature_store.core import Client, Register
-from ..internal import HardcodedMetadata
 from mltools.utils import utils, report
 import os
 import mlflow
@@ -41,7 +40,6 @@ class PredictionMaker:
             raise ValueError("Both 'feature_store_username' and 'feature_store_password' and 'feature_store_address' must be provided in the credentials file.")
 
         # create DB connections
-        # NOTE: hardcoded PostgreSQL for now
         self.feature_store_client = Client.FeatureStoreClient('postgresql+psycopg2',feature_store_username, feature_store_password, feature_store_address)
         self.feature_store_client.connect()
 

@@ -54,6 +54,15 @@ class ModelRegister(Base):
     id = Column(Integer, primary_key=True)
     model_uri = Column(String, nullable=False)  # model_uri in mlflow
 
+# NOTE: ProductionModel is part of the public contract of
+# FeatureStoreClient.collect_features. When a caller passes
+# features_to_collect=[{"table": ..., "version": "production",
+# "model_name": "my_model_name", "output_name": ...}], the model_name is
+# resolved once at call time to the current ModelRegister.id by looking up
+# ProductionModel.name == "my_model_name" (see
+# FeatureStoreClient._resolve_production_model_name in core/Client.py).
+# Any rename / removal / semantic change to the `name` or `model_id` columns
+# here will silently break that resolution path — update both files together.
 class ProductionModel(Base):
     __tablename__ = "ProductionModel"
     __table_args__ = {"schema": SCHEMAS.METADATA.value}
@@ -64,6 +73,19 @@ class ProductionModel(Base):
 
     model = relationship("ModelRegister")
 
+# NOTE: ProductionHistory is part of the public contract of
+# FeatureStoreClient.collect_features. When a caller passes
+# features_to_collect=[{"table": ..., "version": "PIT",
+# "model_name": "my_model_name", "output_name": ...}], the model_name is
+# resolved per-row using ProductionHistory: for each row's reference_time, the
+# chosen model_id is the one from the entry with model_name == "my_model_name"
+# and the largest promoted_at <= reference_time (see
+# FeatureStoreClient._populate_temp_model_id_from_production_history in
+# core/Client.py). Any rename / removal / semantic change to `model_name`,
+# `model_id`, or `promoted_at` will silently break that resolution path —
+# update both files together. Note also that this table is treated as
+# append-only by that path; deleting historical rows changes the model_id
+# returned for past reference_times.
 class ProductionHistory(Base):
     __tablename__ = "ProductionHistory"
     __table_args__ = {"schema": SCHEMAS.METADATA.value}
