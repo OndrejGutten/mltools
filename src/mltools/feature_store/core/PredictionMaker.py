@@ -9,7 +9,27 @@ import pandas as pd
 import numpy as np
 import shutil
 import tempfile
-    
+
+
+def _feature_registry_name(feature_entry):
+    """FeatureRegistry key for a feature_list entry.
+
+    Entries are either a bare feature_name string (FEATURE-type) or a
+    PREDICTION-type dict where the registry key lives under "table"
+    (see FeatureStoreClient._parse_features_to_collect).
+    """
+    return feature_entry["table"] if isinstance(feature_entry, dict) else feature_entry
+
+
+def _feature_output_name(feature_entry):
+    """Result column name produced by collect_features for an entry.
+
+    For a bare string the column is named after the feature; for a
+    PREDICTION-type dict it is the explicit "output_name".
+    """
+    return feature_entry["output_name"] if isinstance(feature_entry, dict) else feature_entry
+
+
 class PredictionMaker:
     def __init__(self, credentials_yaml_path: str, config_yaml_path: str, report_name : str = None):
         self.credentials_yaml_path = credentials_yaml_path
@@ -86,7 +106,8 @@ class PredictionMaker:
             #self.report.add("Number of entities", len(entities))
 
             # construct features list to collect (model to features directory mapping + union of all features)
-            all_features = set()
+            # keyed by output column name so string and dict (PREDICTION-type) entries dedup uniformly
+            all_features = {}
             model_to_features = {}
             model_to_mlflow_uri = {}
             models_config = self.config.get("models", [])
@@ -116,14 +137,15 @@ class PredictionMaker:
 
                 #self.report.add("model_uris", model_uri)
 
-                all_features.update(model_feature_list)
+                for feature_entry in model_feature_list:
+                    all_features[_feature_output_name(feature_entry)] = feature_entry
                 model_to_features[model_uri] = model_feature_list
 
             # collect features
             all_features_df, matched_df, stale_df = self.feature_store_client.collect_features(
                 entities_to_collect=entities,
                 reference_times=reference_times,
-                features_to_collect=list(all_features),
+                features_to_collect=list(all_features.values()),
                 output_reference_time_column='reference_time',  # required by dates-to-timedeltas preprocessor
                 reference_time_comparison = '<='
             )
@@ -141,10 +163,10 @@ class PredictionMaker:
                     raise ValueError(f"Prediction address {prediction_address} not found in feature register. Have you imported it?")
 
                 # check if all features share the entity type
-                model_entity_id_names = [Register._FEATURE_REGISTER.get(feature).entity_id_name for feature in model_to_features[model_uri]]
+                model_entity_id_names = [Register._FEATURE_REGISTER.get(_feature_registry_name(feature)).entity_id_name for feature in model_to_features[model_uri]]
                 if not all(entity_id_name == model_entity_id_names[0] for entity_id_name in model_entity_id_names):
                     raise ValueError(f"Features required by model {model_uri} do not share the same entity ID column. Found: {model_entity_id_names}")
-                columns_required_by_model = model_to_features[model_uri] + ['reference_time']
+                columns_required_by_model = [_feature_output_name(feature) for feature in model_to_features[model_uri]] + ['reference_time']
                 #model_inputs = all_features_df[columns_required_by_model]
                 nonmatched_values = (~matched_df).any(axis=1).to_numpy()
                 stale_values = stale_df.any(axis=1).to_numpy()
